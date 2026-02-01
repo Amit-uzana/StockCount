@@ -59,6 +59,13 @@ export interface CheckBarcodeResult {
   message?: string;
 }
 
+export interface SyncResult {
+  success: boolean;
+  synced: number;
+  closed: number;
+  error?: string;
+}
+
 // פונקציות API
 
 export async function fetchOrders(): Promise<Order[]> {
@@ -68,6 +75,14 @@ export async function fetchOrders(): Promise<Order[]> {
     return data.orders;
   }
   throw new Error(data.error || 'Failed to fetch orders');
+}
+
+export async function syncWithComax(days: number = 30): Promise<SyncResult> {
+  const response = await fetch(`${API_URL}/sync?days=${days}`, {
+    method: 'POST',
+  });
+  const data = await response.json();
+  return data;
 }
 
 export async function fetchOrderDetails(orderId: number): Promise<OrderDetails> {
