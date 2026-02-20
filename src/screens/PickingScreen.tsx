@@ -23,6 +23,7 @@ import {
   checkBarcodeInOrder,
   updateScannedItem,
   completePicking,
+  syncWithComax,
 } from '../services/api';
 import { ItemRow } from '../components/ItemRow';
 import { useScanner } from '../hooks/useScanner';
@@ -172,6 +173,8 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
           try {
             await scanner.close();
             await completePicking(order.id);
+            // סנכרון יום אחד אחרי סיום הזמנה
+            await syncWithComax(1);
             onComplete();
           } catch (error) {
             Alert.alert('שגיאה', 'לא ניתן לסיים ליקוט');

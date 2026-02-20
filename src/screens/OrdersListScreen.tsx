@@ -23,20 +23,38 @@ export function OrdersListScreen({ onSelectOrder }: OrdersListScreenProps) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [initialSync, setInitialSync] = useState(true);
 
   const loadOrders = async () => {
     try {
-      setLoading(true);
       const data = await fetchOrders();
       setOrders(data);
     } catch (error) {
       Alert.alert('שגיאה', 'לא ניתן לטעון הזמנות');
+    }
+  };
+
+  // סנכרון ראשוני בכניסה - 5 ימים
+  const initialSyncAndLoad = async () => {
+    try {
+      setInitialSync(true);
+      setLoading(true);
+      
+      // סנכרון 5 ימים
+      await syncWithComax(5);
+      
+      // טעינת הזמנות
+      await loadOrders();
+    } catch (error) {
+      Alert.alert('שגיאה', 'לא ניתן לסנכרן');
     } finally {
+      setInitialSync(false);
       setLoading(false);
     }
   };
 
-  const handleSync = async () => {
+  // סנכרון ידני - 30 ימים
+  const handleManualSync = async () => {
     try {
       setSyncing(true);
       const result = await syncWithComax(30);
@@ -45,7 +63,6 @@ export function OrdersListScreen({ onSelectOrder }: OrdersListScreenProps) {
       } else {
         Alert.alert('סנכרון הושלם', 'אין הזמנות לעדכון');
       }
-      // רענון הרשימה אחרי סנכרון
       await loadOrders();
     } catch (error) {
       Alert.alert('שגיאה', 'לא ניתן לסנכרן עם קומקס');
@@ -54,15 +71,24 @@ export function OrdersListScreen({ onSelectOrder }: OrdersListScreenProps) {
     }
   };
 
+  // רענון רגיל - בלי סנכרון
+  const handleRefresh = async () => {
+    setLoading(true);
+    await loadOrders();
+    setLoading(false);
+  };
+
   useEffect(() => {
-    loadOrders();
+    initialSyncAndLoad();
   }, []);
 
-  if (loading) {
+  // מסך טעינה ראשוני עם סנכרון
+  if (initialSync) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.loadingText}>טוען הזמנות...</Text>
+        <Text style={styles.loadingText}>מסנכרן 5 ימים אחורה...</Text>
+        <Text style={styles.loadingSubtext}>אנא המתן</Text>
       </View>
     );
   }
@@ -73,7 +99,7 @@ export function OrdersListScreen({ onSelectOrder }: OrdersListScreenProps) {
       <View style={styles.headerRow}>
         <TouchableOpacity 
           style={[styles.syncButton, syncing && styles.syncButtonDisabled]} 
-          onPress={handleSync}
+          onPress={handleManualSync}
           disabled={syncing}
         >
           <Text style={styles.syncButtonText}>
@@ -87,14 +113,14 @@ export function OrdersListScreen({ onSelectOrder }: OrdersListScreenProps) {
       {syncing && (
         <View style={styles.syncingBar}>
           <ActivityIndicator size="small" color={colors.primary} />
-          <Text style={styles.syncingText}>מסנכרן עם קומקס...</Text>
+          <Text style={styles.syncingText}>מסנכרן 30 ימים אחורה...</Text>
         </View>
       )}
 
       {orders.length === 0 ? (
         <View style={styles.centered}>
           <Text style={styles.emptyText}>אין הזמנות ממתינות</Text>
-          <TouchableOpacity style={styles.refreshButton} onPress={loadOrders}>
+          <TouchableOpacity style={styles.refreshButton} onPress={handleRefresh}>
             <Text style={styles.refreshButtonText}>🔄 רענן</Text>
           </TouchableOpacity>
         </View>
@@ -107,7 +133,7 @@ export function OrdersListScreen({ onSelectOrder }: OrdersListScreenProps) {
           keyExtractor={(item) => item.id.toString()}
           contentContainerStyle={styles.listContent}
           refreshing={loading}
-          onRefresh={loadOrders}
+          onRefresh={handleRefresh}
         />
       )}
     </View>
@@ -156,7 +182,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   headerSpacer: {
-    width: 80, // same width as sync button for centering
+    width: 80,
   },
   syncingBar: {
     flexDirection: 'row',
@@ -174,8 +200,14 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     color: colors.textPrimary,
-    marginTop: spacing.sm,
-    fontSize: fontSize.lg,
+    marginTop: spacing.md,
+    fontSize: fontSize.xl,
+    fontWeight: 'bold',
+  },
+  loadingSubtext: {
+    color: colors.textMuted,
+    marginTop: spacing.xs,
+    fontSize: fontSize.md,
   },
   emptyText: {
     color: colors.textSecondary,
