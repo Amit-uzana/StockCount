@@ -1,7 +1,7 @@
 // src/screens/PickingScreen.tsx
-// מסך ליקוט הזמנה
+// מסך ליקוט הזמנה - עם תמיכה בסורק Chainway
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -25,6 +25,7 @@ import {
   completePicking,
 } from '../services/api';
 import { ItemRow } from '../components/ItemRow';
+import { useScanner } from '../hooks/useScanner';
 
 interface PickingScreenProps {
   order: Order;
@@ -47,7 +48,50 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
   const [currentItem, setCurrentItem] = useState<CurrentItem | null>(null);
   const [quantity, setQuantity] = useState('');
   const [manualMode, setManualMode] = useState(false);
+  const [scannerReady, setScannerReady] = useState(false);
   const inputRef = useRef<TextInput>(null);
+  const quantityInputRef = useRef<TextInput>(null);
+
+  // Process barcode - used by both scanner and manual input
+  const processBarcode = useCallback(async (scannedCode: string) => {
+    if (!scannedCode.trim() || !scanning) return;
+
+    try {
+      const result = await checkBarcodeInOrder(order.id, scannedCode.trim());
+
+      if (!result.found_in_system) {
+        Alert.alert('❌ לא נמצא', 'הברקוד לא קיים במערכת');
+        return;
+      }
+
+      if (!result.in_order) {
+        Alert.alert('⚠️ לא בהזמנה', 'הפריט לא נמצא בהזמנה זו');
+        return;
+      }
+
+      if (result.item) {
+        setCurrentItem({
+          item_id: result.item.item_id,
+          name: result.item.name,
+          quantity_ordered: result.item.quantity_ordered,
+          quantity_scanned: result.item.quantity_scanned,
+        });
+        setQuantity(result.item.quantity_ordered.toString());
+        // Focus on quantity input
+        setTimeout(() => quantityInputRef.current?.focus(), 100);
+      }
+    } catch (error) {
+      Alert.alert('שגיאה', 'בעיה בבדיקת הברקוד');
+    }
+  }, [order.id, scanning]);
+
+  // Setup scanner
+  const scanner = useScanner({
+    onScan: processBarcode,
+    onError: (error) => {
+      console.error('Scanner error:', error);
+    },
+  });
 
   const loadOrderDetails = async () => {
     try {
@@ -65,46 +109,27 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
     try {
       await startPicking(order.id, 'עובד מסופון');
       setScanning(true);
-      setTimeout(() => inputRef.current?.focus(), 100);
+      
+      // Open scanner
+      const opened = await scanner.open();
+      setScannerReady(opened);
+      
+      if (!opened) {
+        // Fallback to manual mode if scanner fails
+        setManualMode(true);
+        setTimeout(() => inputRef.current?.focus(), 100);
+      }
     } catch (error) {
       Alert.alert('שגיאה', 'לא ניתן להתחיל ליקוט');
     }
   };
 
+  // Handle manual barcode input
   const handleBarcodeScan = async () => {
     if (!barcode.trim()) return;
-
-    try {
-      const result = await checkBarcodeInOrder(order.id, barcode.trim());
-
-      if (!result.found_in_system) {
-        Alert.alert('❌ לא נמצא', 'הברקוד לא קיים במערכת');
-        setBarcode('');
-        inputRef.current?.focus();
-        return;
-      }
-
-      if (!result.in_order) {
-        Alert.alert('⚠️ לא בהזמנה', 'הפריט לא נמצא בהזמנה זו');
-        setBarcode('');
-        inputRef.current?.focus();
-        return;
-      }
-
-      if (result.item) {
-        setCurrentItem({
-          item_id: result.item.item_id,
-          name: result.item.name,
-          quantity_ordered: result.item.quantity_ordered,
-          quantity_scanned: result.item.quantity_scanned,
-        });
-        setQuantity(result.item.quantity_ordered.toString());
-      }
-      setBarcode('');
-    } catch (error) {
-      Alert.alert('שגיאה', 'בעיה בבדיקת הברקוד');
-      setBarcode('');
-    }
+    await processBarcode(barcode.trim());
+    setBarcode('');
+    inputRef.current?.focus();
   };
 
   const handleQuantitySubmit = async () => {
@@ -116,7 +141,11 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
       setCurrentItem(null);
       setQuantity('');
       setManualMode(false);
-      inputRef.current?.focus();
+      
+      // Return focus based on mode
+      if (manualMode) {
+        inputRef.current?.focus();
+      }
     } catch (error) {
       Alert.alert('שגיאה', 'לא ניתן לעדכן כמות');
     }
@@ -131,6 +160,7 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
       quantity_scanned: item.quantity_scanned || 0,
     });
     setQuantity(item.quantity_ordered.toString());
+    setTimeout(() => quantityInputRef.current?.focus(), 100);
   };
 
   const handleComplete = () => {
@@ -140,6 +170,7 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
         text: 'סיים',
         onPress: async () => {
           try {
+            await scanner.close();
             await completePicking(order.id);
             onComplete();
           } catch (error) {
@@ -148,6 +179,11 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
         },
       },
     ]);
+  };
+
+  const handleBack = async () => {
+    await scanner.close();
+    onBack();
   };
 
   const handleReset = () => {
@@ -167,7 +203,6 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
           await loadOrderDetails();
           setCurrentItem(null);
           setQuantity('');
-          inputRef.current?.focus();
         },
       },
     ]);
@@ -176,10 +211,25 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
   const handleCancelItem = () => {
     setCurrentItem(null);
     setQuantity('');
-    inputRef.current?.focus();
   };
 
-  // חישוב סה"כ פריטים שלוקטו
+  // Toggle between scanner and manual mode
+  const toggleManualMode = async () => {
+    if (manualMode) {
+      // Switch to scanner mode
+      setManualMode(false);
+      const opened = await scanner.open();
+      setScannerReady(opened);
+    } else {
+      // Switch to manual mode
+      await scanner.close();
+      setScannerReady(false);
+      setManualMode(true);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  };
+
+  // Calculate totals
   const getTotalPickedQuantity = () => {
     if (!orderDetails) return 0;
     return orderDetails.items.reduce((sum, item) => sum + (item.quantity_scanned || 0), 0);
@@ -190,7 +240,7 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
     return orderDetails.items.reduce((sum, item) => sum + item.quantity_ordered, 0);
   };
 
-  // מיון פריטים: לא נסרקו למעלה (לפי sub_group), נסרקו למטה
+  // Sort items: pending first, scanned last
   const sortedItems = useMemo(() => {
     if (!orderDetails) return [];
     
@@ -201,12 +251,16 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
       item.quantity_scanned && item.quantity_scanned > 0 && item.status !== 'pending'
     );
     
-    // הפריטים שלא נסרקו כבר ממוינים לפי sub_group מהשרת
     return [...pending, ...scanned];
   }, [orderDetails]);
 
   useEffect(() => {
     loadOrderDetails();
+    
+    // Cleanup scanner on unmount
+    return () => {
+      scanner.close();
+    };
   }, []);
 
   if (loading) {
@@ -221,7 +275,7 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backButton}>
+        <TouchableOpacity onPress={handleBack} style={styles.backButton}>
           <Text style={styles.backButtonText}>← חזור</Text>
         </TouchableOpacity>
         <Text style={styles.title}>#{order.comax_order_id}</Text>
@@ -242,8 +296,22 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
             📋 {orderDetails.summary.scanned_items}/{orderDetails.summary.total_items} שורות
           </Text>
           <Text style={styles.statsText}>
-            ✓ {orderDetails.summary.completion_percentage}%
+            ✔ {orderDetails.summary.completion_percentage}%
           </Text>
+        </View>
+      )}
+
+      {/* Scanner Status */}
+      {scanning && (
+        <View style={styles.scannerStatus}>
+          <Text style={styles.scannerStatusText}>
+            {scannerReady ? '📡 סורק מוכן - ירה על ברקוד' : manualMode ? '⌨️ מצב ידני' : '⏳ מאתחל סורק...'}
+          </Text>
+          <TouchableOpacity onPress={toggleManualMode} style={styles.toggleButton}>
+            <Text style={styles.toggleButtonText}>
+              {manualMode ? '📡' : '⌨️'}
+            </Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -273,6 +341,7 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
                   <Text style={styles.cancelButtonText}>✕</Text>
                 </TouchableOpacity>
                 <TextInput
+                  ref={quantityInputRef}
                   style={styles.quantityInput}
                   value={quantity}
                   onChangeText={setQuantity}
@@ -282,11 +351,11 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
                   autoFocus
                 />
                 <TouchableOpacity style={styles.confirmButton} onPress={handleQuantitySubmit}>
-                  <Text style={styles.confirmButtonText}>✓</Text>
+                  <Text style={styles.confirmButtonText}>✔</Text>
                 </TouchableOpacity>
               </View>
             </View>
-          ) : (
+          ) : manualMode ? (
             <View style={styles.scanInputArea}>
               <TextInput
                 ref={inputRef}
@@ -294,18 +363,17 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
                 value={barcode}
                 onChangeText={setBarcode}
                 onSubmitEditing={handleBarcodeScan}
-                placeholder="סרוק ברקוד או לחץ על פריט..."
-                showSoftInputOnFocus={manualMode}
+                placeholder="הקלד ברקוד..."
                 autoFocus
               />
-              <TouchableOpacity
-                style={styles.manualButton}
-                onPress={() => setManualMode(!manualMode)}
-              >
-                <Text style={styles.manualButtonText}>
-                  {manualMode ? '📷' : '⌨️'}
-                </Text>
+              <TouchableOpacity style={styles.submitButton} onPress={handleBarcodeScan}>
+                <Text style={styles.submitButtonText}>🔍</Text>
               </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.waitingArea}>
+              <Text style={styles.waitingText}>🔫 ירה על ברקוד</Text>
+              <Text style={styles.waitingSubtext}>או לחץ על פריט מהרשימה</Text>
             </View>
           )}
         </View>
@@ -331,7 +399,7 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
       {/* Complete Button */}
       {scanning && (
         <TouchableOpacity style={styles.completeButton} onPress={handleComplete}>
-          <Text style={styles.completeButtonText}>סיים ליקוט ✓</Text>
+          <Text style={styles.completeButtonText}>סיים ליקוט ✔</Text>
         </TouchableOpacity>
       )}
     </SafeAreaView>
@@ -397,6 +465,31 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: fontSize.md,
   },
+  scannerStatus: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: spacing.xs,
+    backgroundColor: colors.primary,
+    marginHorizontal: spacing.sm,
+    marginTop: spacing.xs,
+    borderRadius: borderRadius.sm,
+    gap: spacing.sm,
+  },
+  scannerStatusText: {
+    color: colors.textPrimary,
+    fontSize: fontSize.md,
+    fontWeight: 'bold',
+  },
+  toggleButton: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+  },
+  toggleButtonText: {
+    fontSize: fontSize.lg,
+  },
   progressBar: {
     height: 4,
     backgroundColor: colors.border,
@@ -429,14 +522,34 @@ const styles = StyleSheet.create({
     fontSize: fontSize.lg,
     textAlign: 'center',
   },
-  manualButton: {
+  submitButton: {
     marginLeft: spacing.sm,
     padding: spacing.sm,
-    backgroundColor: colors.cardBackground,
+    backgroundColor: colors.primary,
     borderRadius: borderRadius.md,
+    width: 50,
+    height: 45,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  manualButtonText: {
+  submitButtonText: {
     fontSize: fontSize.xl,
+  },
+  waitingArea: {
+    backgroundColor: colors.cardBackground,
+    padding: spacing.lg,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
+  },
+  waitingText: {
+    fontSize: fontSize.xl,
+    color: colors.textPrimary,
+    fontWeight: 'bold',
+    marginBottom: spacing.xs,
+  },
+  waitingSubtext: {
+    fontSize: fontSize.md,
+    color: colors.textMuted,
   },
   currentItemBox: {
     backgroundColor: colors.cardBackground,
