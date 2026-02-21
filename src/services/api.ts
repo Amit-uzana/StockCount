@@ -63,10 +63,24 @@ export interface SyncResult {
   success: boolean;
   synced: number;
   closed: number;
+  imported: number;
+  updated: number;
   error?: string;
 }
 
 // פונקציות API
+
+export async function healthCheck(): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_URL}/health`, { 
+      signal: AbortSignal.timeout(15000)
+    });
+    const data = await response.json();
+    return data.success === true && data.db === 'connected';
+  } catch {
+    return false;
+  }
+}
 
 export async function fetchOrders(): Promise<Order[]> {
   const response = await fetch(`${API_URL}/orders`);

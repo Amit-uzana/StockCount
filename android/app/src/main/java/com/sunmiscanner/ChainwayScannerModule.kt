@@ -1,6 +1,5 @@
 package com.sunmiscanner
 
-import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -25,85 +24,8 @@ class ChainwayScannerModule(reactContext: ReactApplicationContext) :
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var barcodeDecoder: BarcodeDecoder? = null
-    private var successPlayer: MediaPlayer? = null
-    private var errorPlayer: MediaPlayer? = null
 
     override fun getName(): String = NAME
-
-    /**
-     * Initialize sound players
-     */
-    private fun initSounds() {
-        try {
-            val context = reactApplicationContext
-            
-            // Success sound
-            val successResId = context.resources.getIdentifier("success", "raw", context.packageName)
-            if (successResId != 0) {
-                successPlayer = MediaPlayer.create(context, successResId)
-                successPlayer?.setVolume(1.0f, 1.0f)
-            }
-            
-            // Error sound
-            val errorResId = context.resources.getIdentifier("error", "raw", context.packageName)
-            if (errorResId != 0) {
-                errorPlayer = MediaPlayer.create(context, errorResId)
-                errorPlayer?.setVolume(1.0f, 1.0f)
-            }
-            
-            Log.i(TAG, "Sound players initialized")
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not initialize sounds: ${e.message}")
-        }
-    }
-
-    /**
-     * Play success sound
-     */
-    private fun playSuccessSound() {
-        try {
-            successPlayer?.let {
-                if (it.isPlaying) {
-                    it.seekTo(0)
-                } else {
-                    it.start()
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not play success sound: ${e.message}")
-        }
-    }
-
-    /**
-     * Play error sound
-     */
-    private fun playErrorSound() {
-        try {
-            errorPlayer?.let {
-                if (it.isPlaying) {
-                    it.seekTo(0)
-                } else {
-                    it.start()
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not play error sound: ${e.message}")
-        }
-    }
-
-    /**
-     * Release sound players
-     */
-    private fun releaseSounds() {
-        try {
-            successPlayer?.release()
-            successPlayer = null
-            errorPlayer?.release()
-            errorPlayer = null
-        } catch (e: Exception) {
-            Log.w(TAG, "Error releasing sounds: ${e.message}")
-        }
-    }
 
     /**
      * Send event to JavaScript
@@ -121,9 +43,6 @@ class ChainwayScannerModule(reactContext: ReactApplicationContext) :
     fun open(promise: Promise) {
         Thread {
             try {
-                // Initialize sounds
-                mainHandler.post { initSounds() }
-                
                 // Disable Keyboard Emulator so we get exclusive scanner access
                 try {
                     BarcodeUtility.getInstance().closeKeyboardHelper(reactApplicationContext)
@@ -164,7 +83,6 @@ class ChainwayScannerModule(reactContext: ReactApplicationContext) :
         try {
             barcodeDecoder?.close()
             barcodeDecoder = null
-            releaseSounds()
             Log.i(TAG, "Scanner closed")
             promise.resolve(true)
         } catch (e: Exception) {
@@ -221,16 +139,6 @@ class ChainwayScannerModule(reactContext: ReactApplicationContext) :
         }
 
         Log.d(TAG, "Barcode: status=$status, code=${entity.barcodeData}, type=${entity.barcodeName}")
-
-        // Play sound based on result
-        mainHandler.post {
-            if (entity.resultCode == BarcodeDecoder.DECODE_SUCCESS) {
-                playSuccessSound()
-            } else if (entity.resultCode == BarcodeDecoder.DECODE_FAILURE || 
-                       entity.resultCode == BarcodeDecoder.DECODE_TIMEOUT) {
-                playErrorSound()
-            }
-        }
 
         // Send to React Native on main thread
         mainHandler.post {

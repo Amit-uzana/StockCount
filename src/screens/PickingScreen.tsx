@@ -13,6 +13,7 @@ import {
   SafeAreaView,
   StyleSheet,
 } from 'react-native';
+import Sound from 'react-native-sound';
 import { colors, spacing, fontSize, borderRadius } from '../styles/theme';
 import {
   Order,
@@ -23,10 +24,12 @@ import {
   checkBarcodeInOrder,
   updateScannedItem,
   completePicking,
-  syncWithComax,
 } from '../services/api';
 import { ItemRow } from '../components/ItemRow';
 import { useScanner } from '../hooks/useScanner';
+
+// Enable playback in silent mode
+Sound.setCategory('Playback');
 
 interface PickingScreenProps {
   order: Order;
@@ -41,6 +44,47 @@ interface CurrentItem {
   quantity_scanned: number;
 }
 
+// Initialize sounds once
+let successSound: Sound | null = null;
+let warningSound: Sound | null = null;
+let errorSound: Sound | null = null;
+
+function loadSounds() {
+  if (!successSound) {
+    successSound = new Sound('success.mp3', Sound.MAIN_BUNDLE, (err) => {
+      if (err) console.log('Failed to load success sound:', err);
+    });
+  }
+  if (!warningSound) {
+    warningSound = new Sound('warning.mp3', Sound.MAIN_BUNDLE, (err) => {
+      if (err) console.log('Failed to load warning sound:', err);
+    });
+  }
+  if (!errorSound) {
+    errorSound = new Sound('error.mp3', Sound.MAIN_BUNDLE, (err) => {
+      if (err) console.log('Failed to load error sound:', err);
+    });
+  }
+}
+
+function playSuccess() {
+  successSound?.stop(() => {
+    successSound?.play();
+  });
+}
+
+function playWarning() {
+  warningSound?.stop(() => {
+    warningSound?.play();
+  });
+}
+
+function playError() {
+  errorSound?.stop(() => {
+    errorSound?.play();
+  });
+}
+
 export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps) {
   const [orderDetails, setOrderDetails] = useState<OrderDetails | null>(null);
   const [loading, setLoading] = useState(true);
@@ -53,6 +97,11 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
   const inputRef = useRef<TextInput>(null);
   const quantityInputRef = useRef<TextInput>(null);
 
+  // Load sounds on mount
+  useEffect(() => {
+    loadSounds();
+  }, []);
+
   // Process barcode - used by both scanner and manual input
   const processBarcode = useCallback(async (scannedCode: string) => {
     if (!scannedCode.trim() || !scanning) return;
@@ -61,16 +110,19 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
       const result = await checkBarcodeInOrder(order.id, scannedCode.trim());
 
       if (!result.found_in_system) {
+        playError();
         Alert.alert('❌ לא נמצא', 'הברקוד לא קיים במערכת');
         return;
       }
 
       if (!result.in_order) {
+        playWarning();
         Alert.alert('⚠️ לא בהזמנה', 'הפריט לא נמצא בהזמנה זו');
         return;
       }
 
       if (result.item) {
+        playSuccess();
         setCurrentItem({
           item_id: result.item.item_id,
           name: result.item.name,
@@ -82,6 +134,7 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
         setTimeout(() => quantityInputRef.current?.focus(), 100);
       }
     } catch (error) {
+      playError();
       Alert.alert('שגיאה', 'בעיה בבדיקת הברקוד');
     }
   }, [order.id, scanning]);
@@ -173,8 +226,6 @@ export function PickingScreen({ order, onBack, onComplete }: PickingScreenProps)
           try {
             await scanner.close();
             await completePicking(order.id);
-            // סנכרון יום אחד אחרי סיום הזמנה
-            await syncWithComax(1);
             onComplete();
           } catch (error) {
             Alert.alert('שגיאה', 'לא ניתן לסיים ליקוט');
