@@ -1,155 +1,189 @@
 // src/services/api.ts
-// שירות API - כל הקריאות לשרת
+// StockCount - API calls
 
-const API_URL = 'https://ai-platform-backend-h6l1.onrender.com/api/warehouse-picking';
+const API_URL = 'https://ai-platform-backend-h6l1.onrender.com/api/inventory-count-mobile';
 
-// טיפוסים
-export interface Order {
+// Types
+export interface Count {
   id: number;
-  comax_order_id: string;
-  customer_name: string;
-  customer_id: string;
-  order_date: string;
-  supply_date: string | null;
-  status: 'pending' | 'in_progress' | 'completed' | 'completed_with_issues';
-  total_items: number;
-  scanned_items: number;
-  started_at: string | null;
-  worker_name: string | null;
-  notes: string | null;
+  counter_user_id: number;
+  counter_name: string;
+  branch: 'הפצה' | 'חנות';
+  status: 'IN_PROGRESS' | 'COMPLETED';
   created_at: string;
+  end_date: string | null;
+  total_items: number;
+  unique_items: number;
 }
 
-export interface OrderItem {
+export interface CountItem {
   id: number;
-  item_id: string;
+  count_id: number;
+  item_code: string;
   item_name: string;
-  quantity_ordered: number;
-  quantity_scanned: number | null;
-  status: 'pending' | 'complete' | 'partial' | 'missing';
-  barcode: string;
-  all_barcodes: string | null;
+  department: string | null;
+  item_group: string | null;
+  subgroup: string | null;
+  scanned_barcode: string;
+  failed_barcode: string | null;
+  quantity_counted: number;
+  comax_quantity: number | null;
+  notes: string | null;
+  stock_store: number | null;
+  stock_distribution: number | null;
 }
 
-export interface OrderDetails {
-  order: Order;
-  items: OrderItem[];
-  summary: {
-    total_items: number;
-    scanned_items: number;
-    completed_items: number;
-    partial_items: number;
-    missing_items: number;
-    completion_percentage: number;
-  };
-}
-
-export interface CheckBarcodeResult {
+export interface ScanResult {
   success: boolean;
-  in_order: boolean;
-  found_in_system: boolean;
-  item?: {
-    item_id: string;
-    name: string;
-    quantity_ordered: number;
-    quantity_scanned: number;
-    status: string;
-    all_barcodes?: string;
-  };
-  message?: string;
+  found: boolean;
+  barcode?: string;
+  items?: Array<{
+    item_code: string;
+    prt_c: string;
+    item_name: string;
+    department: string;
+    group: string;
+    sub_group: string;
+    all_barcodes: string;
+    stock_store: number;
+    stock_distribution: number;
+    price: number;
+  }>;
+  already_counted?: {
+    item_code: string;
+    total_counted: number;
+    count_times: number;
+  } | null;
 }
 
-export interface SyncResult {
+export interface SearchResult {
   success: boolean;
-  synced: number;
-  closed: number;
-  imported: number;
-  updated: number;
-  error?: string;
+  items: Array<{
+    item_code: string;
+    prt_c: string;
+    item_name: string;
+    department: string;
+    group: string;
+    sub_group: string;
+    all_barcodes: string;
+    stock_store: number;
+    stock_distribution: number;
+    price: number;
+  }>;
 }
 
-// פונקציות API
+// API Functions
 
-export async function healthCheck(): Promise<boolean> {
-  try {
-    const response = await fetch(`${API_URL}/health`, { 
-      signal: AbortSignal.timeout(15000)
-    });
-    const data = await response.json();
-    return data.success === true && data.db === 'connected';
-  } catch {
-    return false;
-  }
-}
-
-export async function fetchOrders(): Promise<Order[]> {
-  const response = await fetch(`${API_URL}/orders`);
+export async function fetchCounts(): Promise<Count[]> {
+  const response = await fetch(`${API_URL}/counts`);
   const data = await response.json();
   if (data.success) {
-    return data.orders;
+    return data.counts;
   }
-  throw new Error(data.error || 'Failed to fetch orders');
+  throw new Error(data.error || 'Failed to fetch counts');
 }
 
-export async function syncWithComax(days: number = 30): Promise<SyncResult> {
-  const response = await fetch(`${API_URL}/sync?days=${days}`, {
+export async function createCount(branch: string, workerName: string): Promise<Count> {
+  const response = await fetch(`${API_URL}/counts`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ branch, worker_name: workerName }),
+  });
+  const data = await response.json();
+  if (data.success) {
+    return data.count;
+  }
+  throw new Error(data.error || 'Failed to create count');
+}
+
+export async function fetchCountDetails(countId: number): Promise<{ count: Count; items: CountItem[] }> {
+  const response = await fetch(`${API_URL}/counts/${countId}`);
+  const data = await response.json();
+  if (data.success) {
+    return { count: data.count, items: data.items };
+  }
+  throw new Error(data.error || 'Failed to fetch count details');
+}
+
+export async function scanBarcode(countId: number, barcode: string): Promise<ScanResult> {
+  const response = await fetch(`${API_URL}/counts/${countId}/scan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ barcode }),
   });
   const data = await response.json();
   return data;
 }
 
-export async function fetchOrderDetails(orderId: number): Promise<OrderDetails> {
-  const response = await fetch(`${API_URL}/orders/${orderId}`);
+export async function addItemToCount(
+  countId: number,
+  itemCode: string,
+  scannedBarcode: string,
+  quantityCounted: number,
+  notes?: string,
+  failedBarcode?: string
+): Promise<CountItem> {
+  const response = await fetch(`${API_URL}/counts/${countId}/items`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      item_code: itemCode,
+      scanned_barcode: scannedBarcode,
+      quantity_counted: quantityCounted,
+      notes: notes || null,
+      failed_barcode: failedBarcode || null,
+    }),
+  });
   const data = await response.json();
   if (data.success) {
-    return data;
+    return data.item;
   }
-  throw new Error(data.error || 'Failed to fetch order details');
+  throw new Error(data.error || 'Failed to add item');
 }
 
-export async function startPicking(orderId: number, workerName: string): Promise<void> {
-  const response = await fetch(`${API_URL}/orders/${orderId}/start`, {
-    method: 'POST',
+export async function updateCountItem(
+  itemId: number,
+  quantityCounted?: number,
+  notes?: string
+): Promise<CountItem> {
+  const response = await fetch(`${API_URL}/items/${itemId}`, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ worker_name: workerName }),
+    body: JSON.stringify({ quantity_counted: quantityCounted, notes }),
+  });
+  const data = await response.json();
+  if (data.success) {
+    return data.item;
+  }
+  throw new Error(data.error || 'Failed to update item');
+}
+
+export async function deleteCountItem(itemId: number): Promise<void> {
+  const response = await fetch(`${API_URL}/items/${itemId}`, {
+    method: 'DELETE',
   });
   const data = await response.json();
   if (!data.success) {
-    throw new Error(data.error || 'Failed to start picking');
+    throw new Error(data.error || 'Failed to delete item');
   }
 }
 
-export async function checkBarcodeInOrder(orderId: number, barcode: string): Promise<CheckBarcodeResult> {
-  const response = await fetch(`${API_URL}/orders/${orderId}/check-barcode/${barcode}`);
+export async function completeCount(countId: number): Promise<void> {
+  const response = await fetch(`${API_URL}/counts/${countId}/complete`, {
+    method: 'PATCH',
+  });
+  const data = await response.json();
+  if (!data.success) {
+    throw new Error(data.error || 'Failed to complete count');
+  }
+}
+
+export async function searchItems(query: string): Promise<SearchResult> {
+  const response = await fetch(`${API_URL}/search-items`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
+  });
   const data = await response.json();
   return data;
-}
-
-export async function updateScannedItem(
-  orderId: number,
-  itemId: string,
-  quantityScanned: number
-): Promise<void> {
-  const response = await fetch(`${API_URL}/orders/${orderId}/scan`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ item_id: itemId, quantity_scanned: quantityScanned }),
-  });
-  const data = await response.json();
-  if (!data.success) {
-    throw new Error(data.error || 'Failed to update scanned item');
-  }
-}
-
-export async function completePicking(orderId: number, notes?: string): Promise<void> {
-  const response = await fetch(`${API_URL}/orders/${orderId}/complete`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ notes }),
-  });
-  const data = await response.json();
-  if (!data.success) {
-    throw new Error(data.error || 'Failed to complete picking');
-  }
 }

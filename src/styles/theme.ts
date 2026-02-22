@@ -1,37 +1,25 @@
 // src/styles/theme.ts
-// צבעים וסגנונות משותפים לכל האפליקציה
-
 export const colors = {
-  // רקעים
   background: '#1a1a2e',
   cardBackground: '#2d2d44',
-  
-  // ראשי
   primary: '#4CAF50',
   secondary: '#2196F3',
-  
-  // טקסט
-  textPrimary: '#ffffff',
-  textSecondary: '#888888',
-  textMuted: '#aaaaaa',
-  
-  // סטטוסים
-  success: '#1b4d1b',
-  warning: '#4d4d1b',
-  error: '#4d1b1b',
-  
-  // אחר
-  border: '#333333',
+  danger: '#F44336',
+  warning: '#FF9800',
+  border: '#3d3d5c',
   inputBackground: '#ffffff',
-  disabled: '#666666',
+  textPrimary: '#ffffff',
+  textSecondary: '#cccccc',
+  textMuted: '#888888',
+  disabled: '#555555',
 };
 
 export const spacing = {
-  xs: 5,
-  sm: 10,
-  md: 15,
-  lg: 20,
-  xl: 30,
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 20,
 };
 
 export const fontSize = {
@@ -39,12 +27,12 @@ export const fontSize = {
   md: 14,
   lg: 16,
   xl: 18,
-  xxl: 20,
-  title: 24,
+  xxl: 22,
+  title: 20,
 };
 
 export const borderRadius = {
-  sm: 8,
-  md: 10,
-  lg: 15,
+  sm: 4,
+  md: 8,
+  lg: 12,
 };
