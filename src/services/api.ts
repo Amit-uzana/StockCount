@@ -178,6 +178,16 @@ export async function completeCount(countId: number): Promise<void> {
   }
 }
 
+export async function reopenCount(countId: number): Promise<void> {
+  const response = await fetch(`${API_URL}/counts/${countId}/reopen`, {
+    method: 'PATCH',
+  });
+  const data = await response.json();
+  if (!data.success) {
+    throw new Error(data.error || 'Failed to reopen count');
+  }
+}
+
 export async function searchItems(query: string): Promise<SearchResult> {
   const response = await fetch(`${API_URL}/search-items`, {
     method: 'POST',

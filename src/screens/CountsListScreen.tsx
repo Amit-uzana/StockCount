@@ -5,11 +5,12 @@ import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
-  FlatList,
+  ScrollView,
   TouchableOpacity,
   ActivityIndicator,
   Alert,
   StyleSheet,
+  RefreshControl,
 } from 'react-native';
 import { colors, spacing, fontSize, borderRadius } from '../styles/theme';
 import { Count, fetchCounts, createCount } from '../services/api';
@@ -21,6 +22,7 @@ interface CountsListScreenProps {
 export function CountsListScreen({ onSelectCount }: CountsListScreenProps) {
   const [counts, setCounts] = useState<Count[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const loadCounts = async () => {
     try {
@@ -31,6 +33,18 @@ export function CountsListScreen({ onSelectCount }: CountsListScreenProps) {
       Alert.alert('שגיאה', 'לא ניתן לטעון ספירות');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const data = await fetchCounts();
+      setCounts(data);
+    } catch (error) {
+      Alert.alert('שגיאה', 'לא ניתן לטעון ספירות');
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -60,7 +74,7 @@ export function CountsListScreen({ onSelectCount }: CountsListScreenProps) {
   }, []);
 
   const activeCounts = counts.filter(c => c.status === 'IN_PROGRESS');
-  const completedCounts = counts.filter(c => c.status === 'COMPLETED').slice(0, 5);
+  const completedCounts = counts.filter(c => c.status === 'COMPLETED').slice(0, 10);
 
   const formatDate = (dateStr: string) => {
     const d = new Date(dateStr);
@@ -97,77 +111,89 @@ export function CountsListScreen({ onSelectCount }: CountsListScreenProps) {
         </TouchableOpacity>
       </View>
 
-      {/* Active counts */}
-      {activeCounts.length > 0 && (
-        <>
-          <Text style={styles.sectionTitle}>🟢 ספירות פעילות</Text>
-          {activeCounts.map(count => (
-            <TouchableOpacity
-              key={count.id}
-              style={styles.countCard}
-              onPress={() => onSelectCount(count)}
-            >
-              <View style={styles.countCardHeader}>
-                <Text style={styles.countBranch}>{count.branch}</Text>
-                <Text style={styles.countId}>#{count.id}</Text>
-              </View>
-              <View style={styles.countCardBody}>
-                <Text style={styles.countInfo}>
-                  📅 {formatDate(count.created_at)}
-                </Text>
-                <Text style={styles.countInfo}>
-                  👤 {count.counter_name}
-                </Text>
-                <Text style={styles.countInfo}>
-                  📦 {count.total_items || 0} פריטים
-                </Text>
-              </View>
-              <View style={styles.countCardFooter}>
-                <Text style={styles.tapText}>לחץ להמשך ספירה →</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </>
-      )}
+      {/* Scrollable content */}
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        }
+      >
+        {/* Active counts */}
+        {activeCounts.length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>🟢 ספירות פעילות ({activeCounts.length})</Text>
+            {activeCounts.map(count => (
+              <TouchableOpacity
+                key={count.id}
+                style={styles.countCard}
+                onPress={() => onSelectCount(count)}
+              >
+                <View style={styles.countCardHeader}>
+                  <Text style={styles.countBranch}>{count.branch}</Text>
+                  <Text style={styles.countId}>#{count.id}</Text>
+                </View>
+                <View style={styles.countCardBody}>
+                  <Text style={styles.countInfo}>
+                    📅 {formatDate(count.created_at)}
+                  </Text>
+                  <Text style={styles.countInfo}>
+                    👤 {count.counter_name}
+                  </Text>
+                  <Text style={styles.countInfo}>
+                    📦 {count.total_items || 0} פריטים
+                  </Text>
+                </View>
+                <View style={styles.countCardFooter}>
+                  <Text style={styles.tapText}>לחץ להמשך ספירה →</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </>
+        )}
 
-      {/* Completed counts */}
-      {completedCounts.length > 0 && (
-        <>
-          <Text style={styles.sectionTitle}>✅ ספירות שהושלמו</Text>
-          {completedCounts.map(count => (
-            <TouchableOpacity
-              key={count.id}
-              style={[styles.countCard, styles.completedCard]}
-              onPress={() => onSelectCount(count)}
-            >
-              <View style={styles.countCardHeader}>
-                <Text style={styles.countBranch}>{count.branch}</Text>
-                <Text style={styles.countId}>#{count.id}</Text>
-              </View>
-              <View style={styles.countCardBody}>
-                <Text style={styles.countInfo}>
-                  📅 {formatDate(count.created_at)}
-                </Text>
-                <Text style={styles.countInfo}>
-                  📦 {count.total_items || 0} פריטים
-                </Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </>
-      )}
+        {/* Completed counts */}
+        {completedCounts.length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>✅ ספירות שהושלמו ({completedCounts.length})</Text>
+            {completedCounts.map(count => (
+              <TouchableOpacity
+                key={count.id}
+                style={[styles.countCard, styles.completedCard]}
+                onPress={() => onSelectCount(count)}
+              >
+                <View style={styles.countCardHeader}>
+                  <Text style={styles.countBranch}>{count.branch}</Text>
+                  <Text style={styles.countId}>#{count.id}</Text>
+                </View>
+                <View style={styles.countCardBody}>
+                  <Text style={styles.countInfo}>
+                    📅 {formatDate(count.created_at)}
+                  </Text>
+                  <Text style={styles.countInfo}>
+                    👤 {count.counter_name}
+                  </Text>
+                  <Text style={styles.countInfo}>
+                    📦 {count.total_items || 0} פריטים
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </>
+        )}
 
-      {activeCounts.length === 0 && completedCounts.length === 0 && (
-        <View style={styles.centered}>
-          <Text style={styles.emptyText}>אין ספירות</Text>
-          <Text style={styles.emptySubtext}>צור ספירה חדשה למעלה</Text>
-        </View>
-      )}
-
-      {/* Refresh */}
-      <TouchableOpacity style={styles.refreshButton} onPress={loadCounts}>
-        <Text style={styles.refreshButtonText}>🔄 רענן</Text>
-      </TouchableOpacity>
+        {activeCounts.length === 0 && completedCounts.length === 0 && (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>אין ספירות</Text>
+            <Text style={styles.emptySubtext}>צור ספירה חדשה למעלה</Text>
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 }
@@ -198,7 +224,7 @@ const styles = StyleSheet.create({
   createRow: {
     flexDirection: 'row',
     gap: spacing.sm,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   createButton: {
     flex: 1,
@@ -210,6 +236,12 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: fontSize.lg,
     fontWeight: 'bold',
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: spacing.xl,
   },
   sectionTitle: {
     fontSize: fontSize.lg,
@@ -261,6 +293,12 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     color: colors.primary,
   },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingTop: spacing.xl,
+  },
   emptyText: {
     color: colors.textSecondary,
     fontSize: fontSize.xl,
@@ -269,19 +307,5 @@ const styles = StyleSheet.create({
   emptySubtext: {
     color: colors.textMuted,
     fontSize: fontSize.md,
-  },
-  refreshButton: {
-    backgroundColor: colors.cardBackground,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    alignItems: 'center',
-    marginTop: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  refreshButtonText: {
-    color: colors.textPrimary,
-    fontSize: fontSize.lg,
-    fontWeight: 'bold',
   },
 });

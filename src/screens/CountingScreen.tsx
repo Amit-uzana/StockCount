@@ -25,6 +25,7 @@ import {
   updateCountItem,
   deleteCountItem,
   completeCount,
+  reopenCount,
   searchItems,
 } from '../services/api';
 import { CountedItemRow } from '../components/CountedItemRow';
@@ -270,6 +271,24 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
     ]);
   };
 
+  // Reopen count
+  const handleReopen = () => {
+    Alert.alert('פתיחה מחדש', 'לפתוח את הספירה מחדש לעריכה?', [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'פתח',
+        onPress: async () => {
+          try {
+            await reopenCount(count.id);
+            setCountStatus('IN_PROGRESS');
+          } catch (error) {
+            Alert.alert('שגיאה', 'לא ניתן לפתוח מחדש');
+          }
+        },
+      },
+    ]);
+  };
+
   // Search
   const handleSearch = async () => {
     if (!searchQuery || searchQuery.length < 2) return;
@@ -460,6 +479,9 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
       {isCompleted && (
         <View style={styles.completedBanner}>
           <Text style={styles.completedText}>✅ ספירה הושלמה</Text>
+          <TouchableOpacity style={styles.reopenButton} onPress={handleReopen}>
+            <Text style={styles.reopenButtonText}>🔄 פתח מחדש</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -741,6 +763,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   completedText: { color: colors.primary, fontSize: fontSize.lg, fontWeight: 'bold' },
+  reopenButton: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.md,
+    marginTop: spacing.sm,
+  },
+  reopenButtonText: {
+    color: colors.textPrimary,
+    fontSize: fontSize.md,
+    fontWeight: 'bold',
+  },
   itemsHeader: {
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
