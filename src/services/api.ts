@@ -1,7 +1,7 @@
 // src/services/api.ts
 // StockCount - API calls
 
-const API_URL = 'https://ai-platform-backend-h6l1.onrender.com/api/inventory-count-mobile';
+const API_URL = 'https://api.mgmstock.com/api/inventory-count-mobile';
 
 // Types
 export interface Count {
