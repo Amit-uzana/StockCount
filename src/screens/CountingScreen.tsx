@@ -1,7 +1,7 @@
 // src/screens/CountingScreen.tsx
 // מסך ספירה - סריקה + הוספת פריטים
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,9 @@ import {
   SafeAreaView,
   StyleSheet,
   Modal,
+  Switch,
 } from 'react-native';
+import Sound from 'react-native-sound';
 import { colors, spacing, fontSize, borderRadius } from '../styles/theme';
 import {
   Count,
@@ -30,6 +32,20 @@ import {
 } from '../services/api';
 import { CountedItemRow } from '../components/CountedItemRow';
 import { useScanner } from '../hooks/useScanner';
+
+// Audio feedback — same pattern as SunmiScanner's SerialScanScreen
+Sound.setCategory('Playback');
+let successSound: Sound | null = null;
+let errorSound: Sound | null = null;
+let warningSound: Sound | null = null;
+function loadSounds() {
+  if (!successSound) successSound = new Sound('success.mp3', Sound.MAIN_BUNDLE, () => {});
+  if (!errorSound) errorSound = new Sound('error.mp3', Sound.MAIN_BUNDLE, () => {});
+  if (!warningSound) warningSound = new Sound('warning.mp3', Sound.MAIN_BUNDLE, () => {});
+}
+function playSuccess() { successSound?.stop(() => successSound?.play()); }
+function playError() { errorSound?.stop(() => errorSound?.play()); }
+function playWarning() { warningSound?.stop(() => warningSound?.play()); }
 
 interface CountingScreenProps {
   count: Count;
@@ -76,13 +92,26 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
   const [editQuantity, setEditQuantity] = useState('');
   const [editNotes, setEditNotes] = useState('');
 
+  // Quick mode — on a duplicate scan (item already counted), silently +1 with a beep
+  // instead of opening the qty dialog. Saves a lot of taps in real warehouse use.
+  const [quickMode, setQuickMode] = useState(false);
+
+  // Filter list of counted items
+  const [itemsFilter, setItemsFilter] = useState('');
+
+  // ID of the most recently added row — drives the "↶ Undo last" button
+  const [lastAddedItemId, setLastAddedItemId] = useState<number | null>(null);
+
   const inputRef = useRef<TextInput>(null);
   const quantityRef = useRef<TextInput>(null);
 
   // Process barcode from scanner or manual input
   const processBarcode = useCallback(async (scannedCode: string) => {
     if (!scannedCode.trim()) return;
-    
+
+    // Block re-scan while a product card is open or a previous scan is mid-flight
+    if (scannedProduct) return;
+
     const code = scannedCode.trim();
     setLastBarcode(code);
 
@@ -91,6 +120,7 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
 
       if (!result.found || !result.items || result.items.length === 0) {
         // Save failed barcode and open search
+        playError();
         setFailedBarcode(code);
         setSearchQuery(code);
         setSearchVisible(true);
@@ -98,6 +128,24 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
       }
 
       const product = result.items[0];
+
+      // Quick mode: if this product was already counted in this session, just +1 silently.
+      if (quickMode && result.already_counted) {
+        try {
+          const newItem = await addItemToCount(count.id, product.item_code, code, 1, undefined, undefined);
+          playSuccess();
+          setLastAddedItemId(newItem?.id ?? null);
+          await loadItems();
+        } catch {
+          playError();
+          Alert.alert('שגיאה', 'לא ניתן להוסיף פריט');
+        }
+        return;
+      }
+
+      if (result.already_counted) playWarning();
+      else playSuccess();
+
       setScannedProduct({
         item_code: product.item_code,
         item_name: product.item_name,
@@ -112,9 +160,11 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
       setNotes('');
       setTimeout(() => quantityRef.current?.focus(), 100);
     } catch (error) {
+      // Don't touch scannedProduct/lastBarcode — leave whatever was there before
+      playError();
       Alert.alert('שגיאה', 'בעיה בבדיקת הברקוד');
     }
-  }, [count.id]);
+  }, [count.id, quickMode, scannedProduct]);
 
   // Scanner hook
   const scanner = useScanner({
@@ -158,14 +208,17 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
   const handleAddItem = async () => {
     if (!scannedProduct || !quantity) return;
 
-    const qty = parseInt(quantity);
+    // Accept decimals — many warehouse items are sold by weight/volume.
+    // Normalize Hebrew/comma decimal separators.
+    const qty = parseFloat(quantity.replace(',', '.'));
     if (isNaN(qty) || qty <= 0) {
+      playError();
       Alert.alert('שגיאה', 'כמות לא תקינה');
       return;
     }
 
     try {
-      await addItemToCount(
+      const newItem = await addItemToCount(
         count.id,
         scannedProduct.item_code,
         failedBarcode || lastBarcode,
@@ -173,6 +226,8 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
         notes || undefined,
         failedBarcode || undefined
       );
+      playSuccess();
+      setLastAddedItemId(newItem?.id ?? null);
       setScannedProduct(null);
       setQuantity('1');
       setNotes('');
@@ -184,7 +239,22 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
         inputRef.current?.focus();
       }
     } catch (error) {
+      playError();
       Alert.alert('שגיאה', 'לא ניתן להוסיף פריט');
+    }
+  };
+
+  // Undo the most recently added row — single tap, no confirm
+  const handleUndoLast = async () => {
+    if (!lastAddedItemId) return;
+    try {
+      await deleteCountItem(lastAddedItemId);
+      playWarning();
+      setLastAddedItemId(null);
+      await loadItems();
+    } catch (error) {
+      playError();
+      Alert.alert('שגיאה', 'לא ניתן לבטל');
     }
   };
 
@@ -338,9 +408,24 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
   const uniqueItems = new Set(items.map(i => i.item_code)).size;
 
   useEffect(() => {
+    loadSounds();
     loadItems();
+    // Auto-start scanner so the user doesn't have to tap "📡 הפעל סורק" every time
+    handleStartScanner();
     return () => { scanner.close(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Decimal quantity is more permissive; tweak input
+  const filteredItems = useMemo(() => {
+    const q = itemsFilter.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(i =>
+      i.item_name.toLowerCase().includes(q) ||
+      i.item_code.toLowerCase().includes(q) ||
+      (i.scanned_barcode && i.scanned_barcode.toLowerCase().includes(q))
+    );
+  }, [items, itemsFilter]);
 
   if (loading) {
     return (
@@ -369,6 +454,27 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
         <Text style={styles.statsText}>📋 {totalItems} שורות</Text>
       </View>
 
+      {/* Quick-mode + Undo row */}
+      {!isCompleted && (
+        <View style={styles.quickRow}>
+          <View style={styles.quickToggle}>
+            <Text style={styles.quickLabel}>🚀 מצב מהיר (+1 על כפול)</Text>
+            <Switch
+              value={quickMode}
+              onValueChange={setQuickMode}
+              trackColor={{ false: colors.disabled, true: colors.primary }}
+            />
+          </View>
+          <TouchableOpacity
+            style={[styles.undoButton, !lastAddedItemId && styles.undoButtonDisabled]}
+            disabled={!lastAddedItemId}
+            onPress={handleUndoLast}
+          >
+            <Text style={styles.undoButtonText}>↶ ביטול אחרון</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Scanner area */}
       {!isCompleted && (
         <>
@@ -391,7 +497,10 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
 
               {scannedProduct ? (
                 /* Product found - enter quantity */
-                <View style={styles.productBox}>
+                <View style={[
+                  styles.productBox,
+                  scannedProduct.already_counted && styles.productBoxAlreadyCounted,
+                ]}>
                   <Text style={styles.productName}>{scannedProduct.item_name}</Text>
                   <Text style={styles.productCode}>
                     קוד: {scannedProduct.item_code} | {scannedProduct.sub_group || scannedProduct.department}
@@ -418,7 +527,7 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
                         style={styles.quantityInput}
                         value={quantity}
                         onChangeText={setQuantity}
-                        keyboardType="numeric"
+                        keyboardType="decimal-pad"
                         onSubmitEditing={handleAddItem}
                         selectTextOnFocus
                       />
@@ -485,13 +594,22 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
         </View>
       )}
 
-      {/* Items list */}
+      {/* Items list header + filter */}
       <View style={styles.itemsHeader}>
-        <Text style={styles.itemsTitle}>פריטים שנספרו ({totalItems})</Text>
+        <Text style={styles.itemsTitle}>
+          פריטים שנספרו ({itemsFilter ? `${filteredItems.length}/${totalItems}` : totalItems})
+        </Text>
+        <TextInput
+          style={styles.itemsFilterInput}
+          value={itemsFilter}
+          onChangeText={setItemsFilter}
+          placeholder="🔍 חיפוש ברשימה (שם / קוד / ברקוד)"
+          placeholderTextColor={colors.textMuted}
+        />
       </View>
 
       <FlatList
-        data={items}
+        data={filteredItems}
         renderItem={({ item }) => (
           <CountedItemRow
             item={item}
@@ -504,13 +622,15 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
         style={styles.itemsList}
         ListEmptyComponent={
           <View style={styles.emptyList}>
-            <Text style={styles.emptyListText}>טרם נסרקו פריטים</Text>
+            <Text style={styles.emptyListText}>
+              {itemsFilter ? 'אין התאמות' : 'טרם נסרקו פריטים'}
+            </Text>
           </View>
         }
       />
 
-      {/* Complete button */}
-      {scannerActive && !isCompleted && (
+      {/* Complete button — visible whenever count is open, not only when scanner is running */}
+      {!isCompleted && (
         <TouchableOpacity style={styles.completeButton} onPress={handleComplete}>
           <Text style={styles.completeButtonText}>✅ סיים ספירה</Text>
         </TouchableOpacity>
@@ -546,17 +666,23 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
 
             <FlatList
               data={searchResults}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.searchResultRow}
-                  onPress={() => handleSelectSearchResult(item)}
-                >
-                  <Text style={styles.searchResultName}>{item.item_name}</Text>
-                  <Text style={styles.searchResultCode}>
-                    קוד: {item.item_code} | {item.sub_group || item.department}
-                  </Text>
-                </TouchableOpacity>
-              )}
+              renderItem={({ item }) => {
+                const branchStock = count.branch === 'חנות' ? item.stock_store : item.stock_distribution;
+                return (
+                  <TouchableOpacity
+                    style={styles.searchResultRow}
+                    onPress={() => handleSelectSearchResult(item)}
+                  >
+                    <Text style={styles.searchResultName}>{item.item_name}</Text>
+                    <Text style={styles.searchResultCode}>
+                      קוד: {item.item_code} | {item.sub_group || item.department}
+                    </Text>
+                    <Text style={styles.searchResultStock}>
+                      📦 מלאי ב{count.branch}: {branchStock ?? '—'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              }}
               keyExtractor={(item) => item.item_code}
               style={styles.searchResultsList}
               ListEmptyComponent={
@@ -678,6 +804,55 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
     borderWidth: 2,
     borderColor: colors.secondary,
+  },
+  productBoxAlreadyCounted: {
+    backgroundColor: '#4d4d1b',
+    borderColor: colors.warning,
+  },
+  quickRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    gap: spacing.sm,
+  },
+  quickToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: spacing.xs,
+  },
+  quickLabel: {
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+  },
+  undoButton: {
+    backgroundColor: colors.warning,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+  },
+  undoButtonDisabled: {
+    opacity: 0.4,
+  },
+  undoButtonText: {
+    color: colors.textPrimary,
+    fontSize: fontSize.sm,
+    fontWeight: 'bold',
+  },
+  itemsFilterInput: {
+    backgroundColor: colors.inputBackground,
+    height: 36,
+    borderRadius: borderRadius.sm,
+    paddingHorizontal: spacing.sm,
+    fontSize: fontSize.sm,
+    marginTop: spacing.xs,
+  },
+  searchResultStock: {
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    marginTop: 2,
   },
   productName: { color: colors.textPrimary, fontSize: fontSize.xl, fontWeight: 'bold', textAlign: 'center', marginBottom: spacing.xs },
   productCode: { color: colors.textMuted, fontSize: fontSize.md, textAlign: 'center', marginBottom: spacing.xs },

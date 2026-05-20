@@ -11,9 +11,16 @@ import {
   Alert,
   StyleSheet,
   RefreshControl,
+  Linking,
+  Platform,
 } from 'react-native';
 import { colors, spacing, fontSize, borderRadius } from '../styles/theme';
 import { Count, fetchCounts, createCount } from '../services/api';
+
+// OTA update check — bumped automatically by deploy.sh
+export const APP_VERSION = '1.0.1';
+const VERSION_URL = 'https://api.mgmstock.com/downloads/stockcount-version.json';
+const APK_URL = 'https://api.mgmstock.com/downloads/stockcount.apk';
 
 interface CountsListScreenProps {
   onSelectCount: (count: Count) => void;
@@ -23,6 +30,35 @@ export function CountsListScreen({ onSelectCount }: CountsListScreenProps) {
   const [counts, setCounts] = useState<Count[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+
+  // Check for OTA update once on mount — Android only (iOS would go via store)
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    fetch(`${VERSION_URL}?t=${Date.now()}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data?.version && data.version !== APP_VERSION) {
+          setUpdateAvailable(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleUpdate = () => {
+    Alert.alert('עדכון אפליקציה', 'להוריד את הגרסה החדשה?', [
+      { text: 'ביטול', style: 'cancel' },
+      {
+        text: 'הורד',
+        onPress: () => {
+          // Opens APK URL in browser → Android Package Installer prompts to install
+          Linking.openURL(APK_URL).catch(() => {
+            Alert.alert('שגיאה', 'לא ניתן לפתוח את קישור ההורדה');
+          });
+        },
+      },
+    ]);
+  };
 
   const loadCounts = async () => {
     try {
@@ -48,25 +84,13 @@ export function CountsListScreen({ onSelectCount }: CountsListScreenProps) {
     }
   };
 
-  const handleCreateCount = (branch: 'הפצה' | 'חנות') => {
-    Alert.alert(
-      `ספירה חדשה - ${branch}`,
-      'ליצור ספירה חדשה?',
-      [
-        { text: 'ביטול', style: 'cancel' },
-        {
-          text: 'צור',
-          onPress: async () => {
-            try {
-              const count = await createCount(branch, 'מסופון');
-              onSelectCount(count);
-            } catch (error) {
-              Alert.alert('שגיאה', 'לא ניתן ליצור ספירה');
-            }
-          },
-        },
-      ]
-    );
+  const handleCreateCount = async (branch: 'הפצה' | 'חנות') => {
+    try {
+      const count = await createCount(branch, 'מסופון');
+      onSelectCount(count);
+    } catch (error) {
+      Alert.alert('שגיאה', 'לא ניתן ליצור ספירה');
+    }
   };
 
   useEffect(() => {
@@ -93,7 +117,14 @@ export function CountsListScreen({ onSelectCount }: CountsListScreenProps) {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <Text style={styles.title}>📋 ספירות מלאי</Text>
+      <View style={styles.titleRow}>
+        <Text style={styles.title}>📋 ספירות מלאי</Text>
+        {updateAvailable && (
+          <TouchableOpacity style={styles.updateButton} onPress={handleUpdate}>
+            <Text style={styles.updateButtonText}>⬆ עדכון</Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
       {/* Create buttons */}
       <View style={styles.createRow}>
@@ -209,12 +240,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.md,
+    gap: spacing.sm,
+  },
   title: {
     fontSize: fontSize.title,
     fontWeight: 'bold',
     color: colors.textPrimary,
     textAlign: 'center',
-    paddingVertical: spacing.md,
+  },
+  updateButton: {
+    backgroundColor: colors.warning,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+  },
+  updateButtonText: {
+    color: colors.textPrimary,
+    fontSize: fontSize.sm,
+    fontWeight: 'bold',
   },
   loadingText: {
     color: colors.textPrimary,
