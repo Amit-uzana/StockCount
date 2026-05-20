@@ -92,15 +92,22 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
   const [editQuantity, setEditQuantity] = useState('');
   const [editNotes, setEditNotes] = useState('');
 
-  // Quick mode — on a duplicate scan (item already counted), silently +1 with a beep
-  // instead of opening the qty dialog. Saves a lot of taps in real warehouse use.
-  const [quickMode, setQuickMode] = useState(false);
+  // Continuous mode — like bulk_scanner. Each scan adds qty=1 silently with a beep,
+  // no quantity dialog opens. Hardware trigger can be held for rapid-fire scanning.
+  // Duplicates are explicitly allowed here (each physical unit = one row).
+  const [continuousMode, setContinuousMode] = useState(false);
 
   // Filter list of counted items
   const [itemsFilter, setItemsFilter] = useState('');
 
   // ID of the most recently added row — drives the "↶ Undo last" button
   const [lastAddedItemId, setLastAddedItemId] = useState<number | null>(null);
+
+  // CHECKPOINT — shelf boundary. Items added with id > checkpointItemId belong to
+  // the "current shelf" and can be wiped in one click if the shelf had to be redone.
+  // null = no checkpoint set yet (whole count is "current shelf").
+  const [checkpointItemId, setCheckpointItemId] = useState<number | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   const inputRef = useRef<TextInput>(null);
   const quantityRef = useRef<TextInput>(null);
@@ -109,8 +116,8 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
   const processBarcode = useCallback(async (scannedCode: string) => {
     if (!scannedCode.trim()) return;
 
-    // Block re-scan while a product card is open or a previous scan is mid-flight
-    if (scannedProduct) return;
+    // In single-shot mode, block re-scan while the product card is open
+    if (!continuousMode && scannedProduct) return;
 
     const code = scannedCode.trim();
     setLastBarcode(code);
@@ -119,8 +126,13 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
       const result: ScanResult = await scanBarcode(count.id, code);
 
       if (!result.found || !result.items || result.items.length === 0) {
-        // Save failed barcode and open search
         playError();
+        if (continuousMode) {
+          // In continuous mode, don't pop a modal — just beep so the operator
+          // knows to come back to it later. (They can still see unknown codes by
+          // toggling continuous off and re-scanning.)
+          return;
+        }
         setFailedBarcode(code);
         setSearchQuery(code);
         setSearchVisible(true);
@@ -129,8 +141,8 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
 
       const product = result.items[0];
 
-      // Quick mode: if this product was already counted in this session, just +1 silently.
-      if (quickMode && result.already_counted) {
+      // CONTINUOUS MODE — silent +1, no dialog. Each scan = one physical unit.
+      if (continuousMode) {
         try {
           const newItem = await addItemToCount(count.id, product.item_code, code, 1, undefined, undefined);
           playSuccess();
@@ -138,11 +150,12 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
           await loadItems();
         } catch {
           playError();
-          Alert.alert('שגיאה', 'לא ניתן להוסיף פריט');
+          // Soft fail in continuous mode — don't break the scanning flow with a modal
         }
         return;
       }
 
+      // SINGLE-SHOT MODE — open the product card with quantity input
       if (result.already_counted) playWarning();
       else playSuccess();
 
@@ -160,17 +173,64 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
       setNotes('');
       setTimeout(() => quantityRef.current?.focus(), 100);
     } catch (error) {
-      // Don't touch scannedProduct/lastBarcode — leave whatever was there before
       playError();
-      Alert.alert('שגיאה', 'בעיה בבדיקת הברקוד');
+      if (!continuousMode) {
+        Alert.alert('שגיאה', 'בעיה בבדיקת הברקוד');
+      }
     }
-  }, [count.id, quickMode, scannedProduct]);
+  }, [count.id, continuousMode, scannedProduct]);
+
+  // CHECKPOINT — mark the current state as "shelf complete"
+  const handleCheckpoint = () => {
+    const maxId = items.reduce((m, i) => Math.max(m, i.id), 0);
+    setCheckpointItemId(maxId);
+    playSuccess();
+  };
+
+  // CLEAR — delete every item added since the last checkpoint (or since start if no checkpoint)
+  const handleClearSinceCheckpoint = () => {
+    const pending = items.filter(i => i.id > (checkpointItemId ?? 0));
+    if (pending.length === 0) return;
+    Alert.alert(
+      'ניקוי מדף נוכחי',
+      `למחוק ${pending.length} פריטים שנספרו מאז ה-CHECKPOINT האחרון?`,
+      [
+        { text: 'ביטול', style: 'cancel' },
+        {
+          text: 'מחק',
+          style: 'destructive',
+          onPress: async () => {
+            setClearing(true);
+            try {
+              // Sequential to avoid hammering the server with parallel deletes
+              for (const it of pending) {
+                try { await deleteCountItem(it.id); } catch {}
+              }
+              playWarning();
+              setLastAddedItemId(null);
+              await loadItems();
+            } finally {
+              setClearing(false);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   // Scanner hook
   const scanner = useScanner({
     onScan: processBarcode,
     onError: (error) => console.error('Scanner error:', error),
   });
+
+  // Toggle continuous mode — also drives the hardware-level continuous-scan setting
+  // so holding the trigger fires repeated reads.
+  const toggleContinuousMode = useCallback(async () => {
+    const next = !continuousMode;
+    setContinuousMode(next);
+    await scanner.setContinuousMode(next);
+  }, [continuousMode, scanner]);
 
   const loadItems = async () => {
     try {
@@ -412,9 +472,19 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
     loadItems();
     // Auto-start scanner so the user doesn't have to tap "📡 הפעל סורק" every time
     handleStartScanner();
-    return () => { scanner.close(); };
+    return () => {
+      // Reset the hardware to single-shot so other apps don't inherit continuous mode
+      scanner.setContinuousMode(false).catch(() => {});
+      scanner.close();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Items added since the last checkpoint — the "current shelf"
+  const pendingItems = useMemo(
+    () => items.filter(i => i.id > (checkpointItemId ?? 0)),
+    [items, checkpointItemId]
+  );
 
   // Decimal quantity is more permissive; tweak input
   const filteredItems = useMemo(() => {
@@ -454,15 +524,17 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
         <Text style={styles.statsText}>📋 {totalItems} שורות</Text>
       </View>
 
-      {/* Quick-mode + Undo row */}
+      {/* Mode toggle + Undo row */}
       {!isCompleted && (
         <View style={styles.quickRow}>
           <View style={styles.quickToggle}>
-            <Text style={styles.quickLabel}>🚀 מצב מהיר (+1 על כפול)</Text>
+            <Text style={[styles.quickLabel, continuousMode && styles.quickLabelActive]}>
+              🔁 מצב מתמשך
+            </Text>
             <Switch
-              value={quickMode}
-              onValueChange={setQuickMode}
-              trackColor={{ false: colors.disabled, true: colors.primary }}
+              value={continuousMode}
+              onValueChange={toggleContinuousMode}
+              trackColor={{ false: colors.disabled, true: colors.secondary }}
             />
           </View>
           <TouchableOpacity
@@ -472,6 +544,46 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
           >
             <Text style={styles.undoButtonText}>↶ ביטול אחרון</Text>
           </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Continuous-mode banner */}
+      {continuousMode && !isCompleted && (
+        <View style={styles.continuousBanner}>
+          <Text style={styles.continuousBannerText}>
+            ⚡ מצב מתמשך – כל סריקה +1 בלי כרטיס. החזק הדק לסריקה רצופה.
+          </Text>
+        </View>
+      )}
+
+      {/* CHECKPOINT row — shelf boundary management */}
+      {!isCompleted && (
+        <View style={styles.checkpointRow}>
+          <View style={styles.checkpointInfo}>
+            <Text style={styles.checkpointLabel}>📍 מדף נוכחי:</Text>
+            <Text style={styles.checkpointCount}>
+              {pendingItems.length} פריטים
+              {checkpointItemId != null && ` · מאז checkpoint #${checkpointItemId}`}
+            </Text>
+          </View>
+          <View style={styles.checkpointButtons}>
+            <TouchableOpacity
+              style={[styles.checkpointButton, pendingItems.length === 0 && styles.checkpointButtonDisabled]}
+              disabled={pendingItems.length === 0}
+              onPress={handleCheckpoint}
+            >
+              <Text style={styles.checkpointButtonText}>📍 CHECKPOINT</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.clearButton, (pendingItems.length === 0 || clearing) && styles.checkpointButtonDisabled]}
+              disabled={pendingItems.length === 0 || clearing}
+              onPress={handleClearSinceCheckpoint}
+            >
+              <Text style={styles.clearButtonText}>
+                {clearing ? '...' : '🗑️ נקה'}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
 
@@ -841,6 +953,53 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontWeight: 'bold',
   },
+  quickLabelActive: {
+    color: colors.secondary,
+    fontWeight: 'bold',
+  },
+  continuousBanner: {
+    padding: spacing.xs,
+    marginHorizontal: spacing.sm,
+    marginTop: spacing.xs,
+    backgroundColor: '#1b4d1b',
+    borderRadius: borderRadius.sm,
+  },
+  continuousBannerText: {
+    color: '#a5d6a7',
+    fontSize: fontSize.sm,
+    textAlign: 'center',
+    fontWeight: 'bold',
+  },
+  checkpointRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    backgroundColor: colors.cardBackground,
+    marginHorizontal: spacing.sm,
+    marginTop: spacing.xs,
+    borderRadius: borderRadius.sm,
+    gap: spacing.sm,
+  },
+  checkpointInfo: { flex: 1 },
+  checkpointLabel: { color: colors.textSecondary, fontSize: fontSize.sm },
+  checkpointCount: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: 'bold' },
+  checkpointButtons: { flexDirection: 'row', gap: spacing.xs },
+  checkpointButton: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+  },
+  checkpointButtonText: { color: colors.textPrimary, fontSize: fontSize.sm, fontWeight: 'bold' },
+  checkpointButtonDisabled: { opacity: 0.4 },
+  clearButton: {
+    backgroundColor: colors.danger,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+  },
+  clearButtonText: { color: colors.textPrimary, fontSize: fontSize.sm, fontWeight: 'bold' },
   itemsFilterInput: {
     backgroundColor: colors.inputBackground,
     height: 36,

@@ -18,7 +18,7 @@ import { colors, spacing, fontSize, borderRadius } from '../styles/theme';
 import { Count, fetchCounts, createCount } from '../services/api';
 
 // OTA update check — bumped automatically by deploy.sh
-export const APP_VERSION = '1.0.1';
+export const APP_VERSION = '1.0.2';
 const VERSION_URL = 'https://api.mgmstock.com/downloads/stockcount-version.json';
 const APK_URL = 'https://api.mgmstock.com/downloads/stockcount.apk';
 

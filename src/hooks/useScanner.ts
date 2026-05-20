@@ -78,6 +78,17 @@ export function useScanner(options: UseScannerOptions = {}) {
     }
   }, []);
 
+  // Continuous mode — hold trigger to scan repeatedly
+  const setContinuousMode = useCallback(async (enabled: boolean) => {
+    if (!ChainwayScanner) return false;
+    try {
+      return await ChainwayScanner.setContinuousMode(enabled);
+    } catch (error) {
+      console.error('Failed to set continuous mode:', error);
+      return false;
+    }
+  }, []);
+
   // Setup event listener
   useEffect(() => {
     if (Platform.OS !== 'android' || !ChainwayScanner) {
@@ -121,5 +132,6 @@ export function useScanner(options: UseScannerOptions = {}) {
     close,
     startScan,
     stopScan,
+    setContinuousMode,
   };
 }

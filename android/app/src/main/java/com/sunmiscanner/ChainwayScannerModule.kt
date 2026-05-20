@@ -126,6 +126,28 @@ class ChainwayScannerModule(reactContext: ReactApplicationContext) :
     }
 
     /**
+     * Enable or disable continuous scanning mode via BarcodeUtility.
+     * When enabled, holding the trigger scans repeatedly with a 100ms gap.
+     */
+    @ReactMethod
+    fun setContinuousMode(enabled: Boolean, promise: Promise) {
+        try {
+            val ctx = reactApplicationContext
+            val utility = BarcodeUtility.getInstance()
+            utility.enableContinuousScan(ctx, enabled)
+            if (enabled) {
+                utility.setContinuousScanIntervalTime(ctx, 100)   // 100ms between scans
+                utility.setContinuousScanTimeOut(ctx, 600000)     // 10 minutes timeout
+            }
+            Log.i(TAG, "Continuous mode: $enabled")
+            promise.resolve(true)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting continuous mode: ${e.message}")
+            promise.reject("CONTINUOUS_ERROR", e.message)
+        }
+    }
+
+    /**
      * Called when barcode is decoded
      */
     private fun onBarcodeDecoded(entity: BarcodeEntity) {
