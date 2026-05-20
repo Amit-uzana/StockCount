@@ -112,12 +112,14 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
   const inputRef = useRef<TextInput>(null);
   const quantityRef = useRef<TextInput>(null);
 
-  // Continuous-mode dedup: when the trigger is held the hardware fires every 100ms
-  // on the same physical barcode. Ignore repeated reads of the same code for 1500ms
-  // so each physical unit = one count.
+  // Continuous-mode dedup: the hardware fires every 100ms on the same physical
+  // barcode while the trigger is held. We treat any quiet period > QUIET_MS as
+  // "trigger released" — only then is the same code allowed to count again.
+  // The timestamp is refreshed on EVERY incoming scan (accepted or blocked) so
+  // the dedup window doesn't expire while the trigger is still held.
   const lastScanCodeRef = useRef<string>('');
   const lastScanTimeRef = useRef<number>(0);
-  const CONTINUOUS_DEDUP_MS = 1500;
+  const QUIET_MS = 400;
 
   // Process barcode from scanner or manual input
   const processBarcode = useCallback(async (scannedCode: string) => {
@@ -128,11 +130,13 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
 
     const code = scannedCode.trim();
 
-    // Continuous-mode dedup: same code within the window = held trigger, ignore silently.
-    // Different code OR enough time elapsed (= you've moved to the next item) = count it.
+    // Continuous-mode dedup: refresh the timestamp on EVERY sighting (including
+    // blocked ones) so the window slides as long as the trigger is held. Only a
+    // real quiet period (> QUIET_MS) = trigger released = next read counts.
     if (continuousMode) {
       const now = Date.now();
-      if (code === lastScanCodeRef.current && now - lastScanTimeRef.current < CONTINUOUS_DEDUP_MS) {
+      if (code === lastScanCodeRef.current && now - lastScanTimeRef.current < QUIET_MS) {
+        lastScanTimeRef.current = now;
         return;
       }
       lastScanCodeRef.current = code;
