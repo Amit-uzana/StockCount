@@ -112,14 +112,13 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
   const inputRef = useRef<TextInput>(null);
   const quantityRef = useRef<TextInput>(null);
 
-  // Continuous-mode dedup: the hardware fires every 100ms on the same physical
-  // barcode while the trigger is held. We treat any quiet period > QUIET_MS as
-  // "trigger released" — only then is the same code allowed to count again.
-  // The timestamp is refreshed on EVERY incoming scan (accepted or blocked) so
-  // the dedup window doesn't expire while the trigger is still held.
-  const lastScanCodeRef = useRef<string>('');
-  const lastScanTimeRef = useRef<number>(0);
-  const QUIET_MS = 400;
+  // Continuous-mode cooldown: in continuous mode the hardware keeps firing on
+  // its own ("press once, scanning runs forever"). After every processed read
+  // we lock the scanner for COOLDOWN_MS — anything that comes in during the
+  // cooldown is dropped silently. This is exactly the bulk_scanner UX:
+  // press → beep → wait → next item → beep → wait → ...
+  const cooldownUntilRef = useRef<number>(0);
+  const COOLDOWN_MS = 1500;
 
   // Process barcode from scanner or manual input
   const processBarcode = useCallback(async (scannedCode: string) => {
@@ -130,17 +129,10 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
 
     const code = scannedCode.trim();
 
-    // Continuous-mode dedup: refresh the timestamp on EVERY sighting (including
-    // blocked ones) so the window slides as long as the trigger is held. Only a
-    // real quiet period (> QUIET_MS) = trigger released = next read counts.
-    if (continuousMode) {
-      const now = Date.now();
-      if (code === lastScanCodeRef.current && now - lastScanTimeRef.current < QUIET_MS) {
-        lastScanTimeRef.current = now;
-        return;
-      }
-      lastScanCodeRef.current = code;
-      lastScanTimeRef.current = now;
+    // Continuous-mode cooldown — drop everything that arrives during the
+    // 1.5s lock that follows a processed scan.
+    if (continuousMode && Date.now() < cooldownUntilRef.current) {
+      return;
     }
 
     setLastBarcode(code);
@@ -151,9 +143,10 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
       if (!result.found || !result.items || result.items.length === 0) {
         playError();
         if (continuousMode) {
-          // In continuous mode, don't pop a modal — just beep so the operator
-          // knows to come back to it later. (They can still see unknown codes by
-          // toggling continuous off and re-scanning.)
+          // Beep once and lock — otherwise the hardware's continuous fire
+          // would keep beeping "not found" until the operator physically moves
+          // the gun off the unknown barcode.
+          cooldownUntilRef.current = Date.now() + COOLDOWN_MS;
           return;
         }
         setFailedBarcode(code);
@@ -173,7 +166,9 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
           await loadItems();
         } catch {
           playError();
-          // Soft fail in continuous mode — don't break the scanning flow with a modal
+        } finally {
+          // Lock for COOLDOWN_MS after every processed continuous-mode read
+          cooldownUntilRef.current = Date.now() + COOLDOWN_MS;
         }
         return;
       }
@@ -197,7 +192,9 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
       setTimeout(() => quantityRef.current?.focus(), 100);
     } catch (error) {
       playError();
-      if (!continuousMode) {
+      if (continuousMode) {
+        cooldownUntilRef.current = Date.now() + COOLDOWN_MS;
+      } else {
         Alert.alert('שגיאה', 'בעיה בבדיקת הברקוד');
       }
     }
@@ -248,13 +245,12 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
   });
 
   // Toggle continuous mode — also drives the hardware-level continuous-scan setting
-  // so holding the trigger fires repeated reads.
+  // so a single trigger press runs the scanner forever.
   const toggleContinuousMode = useCallback(async () => {
     const next = !continuousMode;
     setContinuousMode(next);
-    // Reset dedup state so the first scan after toggling always registers
-    lastScanCodeRef.current = '';
-    lastScanTimeRef.current = 0;
+    // Clear any leftover cooldown so the first scan after toggling counts
+    cooldownUntilRef.current = 0;
     await scanner.setContinuousMode(next);
   }, [continuousMode, scanner]);
 
@@ -577,7 +573,7 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
       {continuousMode && !isCompleted && (
         <View style={styles.continuousBanner}>
           <Text style={styles.continuousBannerText}>
-            ⚡ מצב מתמשך – כל סריקה +1 בלי כרטיס. החזק הדק לסריקה רצופה.
+            ⚡ מצב מתמשך – לחץ הדק פעם אחת וסרוק. השהיה של 1.5 שניות בין קריאות.
           </Text>
         </View>
       )}
