@@ -103,11 +103,13 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
   // ID of the most recently added row — drives the "↶ Undo last" button
   const [lastAddedItemId, setLastAddedItemId] = useState<number | null>(null);
 
-  // CHECKPOINT — shelf boundary. Items added with id > checkpointItemId belong to
-  // the "current shelf" and can be wiped in one click if the shelf had to be redone.
-  // null = no checkpoint set yet (whole count is "current shelf").
-  const [checkpointItemId, setCheckpointItemId] = useState<number | null>(null);
+  // CHECKPOINT — list of shelf boundaries (item IDs). Each adjacent pair (plus 0
+  // and infinity at the ends) defines a "shelf". The user can press CHECKPOINT
+  // to close the current shelf and start a new one, or open the shelves modal
+  // to revisit / clear any past shelf.
+  const [checkpoints, setCheckpoints] = useState<number[]>([]);
   const [clearing, setClearing] = useState(false);
+  const [shelvesModalOpen, setShelvesModalOpen] = useState(false);
 
   const inputRef = useRef<TextInput>(null);
   const quantityRef = useRef<TextInput>(null);
@@ -203,20 +205,40 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
     }
   }, [count.id, continuousMode, scannedProduct]);
 
-  // CHECKPOINT — mark the current state as "shelf complete"
+  // Derive shelves from checkpoints + items. The last entry is always the
+  // "current" (open) shelf; all earlier ones are closed and can be cleared.
+  const shelves = useMemo(() => {
+    const result: { index: number; startId: number; endId: number | null; items: CountItem[]; isCurrent: boolean }[] = [];
+    let prev = 0;
+    checkpoints.forEach((boundary, i) => {
+      const shelfItems = items.filter(it => it.id > prev && it.id <= boundary);
+      result.push({ index: i + 1, startId: prev, endId: boundary, items: shelfItems, isCurrent: false });
+      prev = boundary;
+    });
+    const currentItems = items.filter(it => it.id > prev);
+    result.push({ index: checkpoints.length + 1, startId: prev, endId: null, items: currentItems, isCurrent: true });
+    return result;
+  }, [items, checkpoints]);
+
+  const currentShelf = shelves[shelves.length - 1];
+
+  // CHECKPOINT — close the current shelf, start a new one
   const handleCheckpoint = () => {
     const maxId = items.reduce((m, i) => Math.max(m, i.id), 0);
-    setCheckpointItemId(maxId);
+    if (maxId === 0 || (checkpoints.length > 0 && checkpoints[checkpoints.length - 1] === maxId)) return;
+    setCheckpoints([...checkpoints, maxId]);
     playSuccess();
   };
 
-  // CLEAR — delete every item added since the last checkpoint (or since start if no checkpoint)
-  const handleClearSinceCheckpoint = () => {
-    const pending = items.filter(i => i.id > (checkpointItemId ?? 0));
-    if (pending.length === 0) return;
+  // Wipe a specific shelf (current OR any past one). Past-shelf wipes also
+  // remove the now-empty boundary so shelves before/after merge cleanly.
+  const handleClearShelf = (shelfIdx: number) => {
+    const shelf = shelves[shelfIdx];
+    if (!shelf || shelf.items.length === 0) return;
+    const label = shelf.isCurrent ? 'המדף הנוכחי' : `מדף ${shelf.index}`;
     Alert.alert(
-      'ניקוי מדף נוכחי',
-      `למחוק ${pending.length} פריטים שנספרו מאז ה-CHECKPOINT האחרון?`,
+      `ניקוי ${label}`,
+      `למחוק ${shelf.items.length} פריטים מ${label}?`,
       [
         { text: 'ביטול', style: 'cancel' },
         {
@@ -225,12 +247,15 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
           onPress: async () => {
             setClearing(true);
             try {
-              // Sequential to avoid hammering the server with parallel deletes
-              for (const it of pending) {
+              for (const it of shelf.items) {
                 try { await deleteCountItem(it.id); } catch {}
               }
               playWarning();
               setLastAddedItemId(null);
+              // Drop the boundary for a closed shelf so the remaining shelves renumber
+              if (!shelf.isCurrent) {
+                setCheckpoints(cps => cps.filter((_, i) => i !== shelfIdx));
+              }
               await loadItems();
             } finally {
               setClearing(false);
@@ -240,6 +265,9 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
       ]
     );
   };
+
+  // Quick action — clear just the current shelf (kept for the inline button)
+  const handleClearCurrentShelf = () => handleClearShelf(shelves.length - 1);
 
   // Scanner hook
   const scanner = useScanner({
@@ -505,11 +533,8 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Items added since the last checkpoint — the "current shelf"
-  const pendingItems = useMemo(
-    () => items.filter(i => i.id > (checkpointItemId ?? 0)),
-    [items, checkpointItemId]
-  );
+  // Current-shelf items (alias for legacy references)
+  const pendingItems = currentShelf?.items ?? [];
 
   // Decimal quantity is more permissive; tweak input
   const filteredItems = useMemo(() => {
@@ -581,17 +606,24 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
         </View>
       )}
 
-      {/* CHECKPOINT row — shelf boundary management */}
+      {/* CHECKPOINT row — current-shelf controls + shelves modal opener */}
       {!isCompleted && (
         <View style={styles.checkpointRow}>
           <View style={styles.checkpointInfo}>
-            <Text style={styles.checkpointLabel}>📍 מדף נוכחי:</Text>
+            <Text style={styles.checkpointLabel}>
+              📍 מדף נוכחי ({checkpoints.length + 1}/{checkpoints.length + 1}):
+            </Text>
             <Text style={styles.checkpointCount}>
               {pendingItems.length} פריטים
-              {checkpointItemId != null && ` · מאז checkpoint #${checkpointItemId}`}
             </Text>
           </View>
           <View style={styles.checkpointButtons}>
+            <TouchableOpacity
+              style={styles.shelvesButton}
+              onPress={() => setShelvesModalOpen(true)}
+            >
+              <Text style={styles.shelvesButtonText}>📂 {checkpoints.length + 1}</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={[styles.checkpointButton, pendingItems.length === 0 && styles.checkpointButtonDisabled]}
               disabled={pendingItems.length === 0}
@@ -602,7 +634,7 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
             <TouchableOpacity
               style={[styles.clearButton, (pendingItems.length === 0 || clearing) && styles.checkpointButtonDisabled]}
               disabled={pendingItems.length === 0 || clearing}
-              onPress={handleClearSinceCheckpoint}
+              onPress={handleClearCurrentShelf}
             >
               <Text style={styles.clearButtonText}>
                 {clearing ? '...' : '🗑️ נקה'}
@@ -611,6 +643,44 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
           </View>
         </View>
       )}
+
+      {/* Shelves modal — see all shelves, clear any specific one */}
+      <Modal visible={shelvesModalOpen} animationType="slide" transparent onRequestClose={() => setShelvesModalOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>📂 מדפים בספירה</Text>
+            <FlatList
+              data={shelves}
+              keyExtractor={(s) => `${s.index}-${s.startId}-${s.endId ?? 'open'}`}
+              renderItem={({ item: shelf, index: shelfIdx }) => (
+                <View style={[styles.shelfRow, shelf.isCurrent && styles.shelfRowCurrent]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.shelfName}>
+                      {shelf.isCurrent ? `📍 מדף נוכחי (#${shelf.index})` : `✅ מדף ${shelf.index}`}
+                    </Text>
+                    <Text style={styles.shelfCount}>{shelf.items.length} פריטים</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.clearShelfButton, (shelf.items.length === 0 || clearing) && styles.checkpointButtonDisabled]}
+                    disabled={shelf.items.length === 0 || clearing}
+                    onPress={() => {
+                      setShelvesModalOpen(false);
+                      handleClearShelf(shelfIdx);
+                    }}
+                  >
+                    <Text style={styles.clearButtonText}>🗑️</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              style={{ maxHeight: 400 }}
+              ListEmptyComponent={<Text style={styles.modalEmpty}>אין מדפים עדיין</Text>}
+            />
+            <TouchableOpacity style={styles.closeModalButton} onPress={() => setShelvesModalOpen(false)}>
+              <Text style={styles.closeModalText}>סגור</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Scanner area */}
       {!isCompleted && (
@@ -633,12 +703,32 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
               </View>
 
               {scannedProduct ? (
-                /* Product found - enter quantity */
+                /* Product found - enter quantity. Layout puts qty + Add row at
+                   the top so the keyboard never hides them. */
                 <View style={[
                   styles.productBox,
                   scannedProduct.already_counted && styles.productBoxAlreadyCounted,
                 ]}>
-                  <Text style={styles.productName}>{scannedProduct.item_name}</Text>
+                  <Text style={styles.productName} numberOfLines={2}>{scannedProduct.item_name}</Text>
+
+                  {/* MAIN ACTION ROW — always visible above the keyboard */}
+                  <View style={styles.primaryActionRow}>
+                    <Text style={styles.qtyLabel}>כמות:</Text>
+                    <TextInput
+                      ref={quantityRef}
+                      style={styles.primaryQtyInput}
+                      value={quantity}
+                      onChangeText={setQuantity}
+                      keyboardType="decimal-pad"
+                      onSubmitEditing={handleAddItem}
+                      selectTextOnFocus
+                    />
+                    <TouchableOpacity style={styles.primaryAddButton} onPress={handleAddItem}>
+                      <Text style={styles.primaryAddButtonText}>+ הוסף</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Secondary info — informational, ok to be hidden by keyboard */}
                   <Text style={styles.productCode}>
                     קוד: {scannedProduct.item_code} | {scannedProduct.sub_group || scannedProduct.department}
                   </Text>
@@ -656,39 +746,17 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
                     </Text>
                   )}
 
-                  <View style={styles.inputRow}>
-                    <View style={styles.inputGroup}>
-                      <Text style={styles.inputLabel}>כמות</Text>
-                      <TextInput
-                        ref={quantityRef}
-                        style={styles.quantityInput}
-                        value={quantity}
-                        onChangeText={setQuantity}
-                        keyboardType="decimal-pad"
-                        onSubmitEditing={handleAddItem}
-                        selectTextOnFocus
-                      />
-                    </View>
-                    <View style={[styles.inputGroup, { flex: 2 }]}>
-                      <Text style={styles.inputLabel}>הערות</Text>
-                      <TextInput
-                        style={styles.notesInput}
-                        value={notes}
-                        onChangeText={setNotes}
-                        placeholder="אופציונלי"
-                        onSubmitEditing={handleAddItem}
-                      />
-                    </View>
-                  </View>
+                  <TextInput
+                    style={styles.notesInput}
+                    value={notes}
+                    onChangeText={setNotes}
+                    placeholder="הערות (אופציונלי)"
+                    onSubmitEditing={handleAddItem}
+                  />
 
-                  <View style={styles.actionRow}>
-                    <TouchableOpacity style={styles.cancelButton} onPress={handleCancelScan}>
-                      <Text style={styles.cancelButtonText}>ביטול</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.addButton} onPress={handleAddItem}>
-                      <Text style={styles.addButtonText}>+ הוסף</Text>
-                    </TouchableOpacity>
-                  </View>
+                  <TouchableOpacity style={styles.cancelButtonSmall} onPress={handleCancelScan}>
+                    <Text style={styles.cancelButtonText}>ביטול</Text>
+                  </TouchableOpacity>
                 </View>
               ) : manualMode ? (
                 /* Manual barcode input */
@@ -1025,6 +1093,76 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.sm,
   },
   clearButtonText: { color: colors.textPrimary, fontSize: fontSize.sm, fontWeight: 'bold' },
+  shelvesButton: {
+    backgroundColor: colors.secondary,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+  },
+  shelvesButtonText: { color: colors.textPrimary, fontSize: fontSize.sm, fontWeight: 'bold' },
+  shelfRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: spacing.sm,
+    marginBottom: spacing.xs,
+    backgroundColor: colors.cardBackground,
+    borderRadius: borderRadius.sm,
+  },
+  shelfRowCurrent: {
+    borderWidth: 2,
+    borderColor: colors.primary,
+  },
+  shelfName: { color: colors.textPrimary, fontSize: fontSize.md, fontWeight: 'bold' },
+  shelfCount: { color: colors.textMuted, fontSize: fontSize.sm },
+  clearShelfButton: {
+    backgroundColor: colors.danger,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.sm,
+  },
+  modalEmpty: {
+    color: colors.textMuted,
+    fontSize: fontSize.md,
+    textAlign: 'center',
+    padding: spacing.md,
+  },
+  primaryActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  qtyLabel: {
+    color: colors.textPrimary,
+    fontSize: fontSize.lg,
+    fontWeight: 'bold',
+  },
+  primaryQtyInput: {
+    backgroundColor: colors.inputBackground,
+    height: 50,
+    width: 80,
+    borderRadius: borderRadius.md,
+    fontSize: fontSize.xl,
+    textAlign: 'center',
+    fontWeight: 'bold',
+  },
+  primaryAddButton: {
+    flex: 1,
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
+  },
+  primaryAddButtonText: { color: colors.textPrimary, fontSize: fontSize.xl, fontWeight: 'bold' },
+  cancelButtonSmall: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.disabled,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.sm,
+    marginTop: spacing.sm,
+  },
   itemsFilterInput: {
     backgroundColor: colors.inputBackground,
     height: 36,
