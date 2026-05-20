@@ -130,9 +130,12 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
     const code = scannedCode.trim();
 
     // Continuous-mode cooldown — drop everything that arrives during the
-    // 1.5s lock that follows a processed scan.
-    if (continuousMode && Date.now() < cooldownUntilRef.current) {
-      return;
+    // 1.5s lock. CRITICAL: arm the cooldown SYNCHRONOUSLY before any await,
+    // otherwise the ~10 scan events that fire during the network request all
+    // sail through and add duplicate rows.
+    if (continuousMode) {
+      if (Date.now() < cooldownUntilRef.current) return;
+      cooldownUntilRef.current = Date.now() + COOLDOWN_MS;
     }
 
     setLastBarcode(code);
