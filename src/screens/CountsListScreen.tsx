@@ -11,16 +11,17 @@ import {
   Alert,
   StyleSheet,
   RefreshControl,
-  Linking,
   Platform,
 } from 'react-native';
+import ReactNativeBlobUtil from 'react-native-blob-util';
 import { colors, spacing, fontSize, borderRadius } from '../styles/theme';
 import { Count, fetchCounts, createCount } from '../services/api';
 
 // OTA update check — bumped automatically by deploy.sh
-export const APP_VERSION = '1.0.3';
+export const APP_VERSION = '1.0.4';
 const VERSION_URL = 'https://api.mgmstock.com/downloads/stockcount-version.json';
 const APK_URL = 'https://api.mgmstock.com/downloads/stockcount.apk';
+const APK_FILENAME = 'stockcount.apk';
 
 interface CountsListScreenProps {
   onSelectCount: (count: Count) => void;
@@ -31,6 +32,8 @@ export function CountsListScreen({ onSelectCount }: CountsListScreenProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
 
   // Check for OTA update once on mount — Android only (iOS would go via store)
   useEffect(() => {
@@ -45,18 +48,36 @@ export function CountsListScreen({ onSelectCount }: CountsListScreenProps) {
       .catch(() => {});
   }, []);
 
+  // In-app download + launch installer — same pattern as SunmiScanner
+  const downloadAndInstall = async () => {
+    try {
+      setDownloading(true);
+      setDownloadProgress(0);
+
+      const filePath = `${ReactNativeBlobUtil.fs.dirs.DownloadDir}/${APK_FILENAME}`;
+
+      const res = await ReactNativeBlobUtil.config({ path: filePath, fileCache: true })
+        .fetch('GET', APK_URL)
+        .progress((received: string, total: string) => {
+          setDownloadProgress(Math.round((parseInt(received, 10) / parseInt(total, 10)) * 100));
+        });
+
+      setDownloading(false);
+      // Launch the Android Package Installer — user taps "Install"
+      await ReactNativeBlobUtil.android.actionViewIntent(
+        res.path(),
+        'application/vnd.android.package-archive'
+      );
+    } catch (e: any) {
+      setDownloading(false);
+      Alert.alert('שגיאה', e.message || 'שגיאה בהורדת העדכון');
+    }
+  };
+
   const handleUpdate = () => {
-    Alert.alert('עדכון אפליקציה', 'להוריד את הגרסה החדשה?', [
+    Alert.alert('עדכון אפליקציה', 'להוריד ולהתקין גרסה חדשה?', [
       { text: 'ביטול', style: 'cancel' },
-      {
-        text: 'הורד',
-        onPress: () => {
-          // Opens APK URL in browser → Android Package Installer prompts to install
-          Linking.openURL(APK_URL).catch(() => {
-            Alert.alert('שגיאה', 'לא ניתן לפתוח את קישור ההורדה');
-          });
-        },
-      },
+      { text: 'עדכן', onPress: downloadAndInstall },
     ]);
   };
 
@@ -120,8 +141,14 @@ export function CountsListScreen({ onSelectCount }: CountsListScreenProps) {
       <View style={styles.titleRow}>
         <Text style={styles.title}>📋 ספירות מלאי</Text>
         {updateAvailable && (
-          <TouchableOpacity style={styles.updateButton} onPress={handleUpdate}>
-            <Text style={styles.updateButtonText}>⬆ עדכון</Text>
+          <TouchableOpacity
+            style={styles.updateButton}
+            disabled={downloading}
+            onPress={handleUpdate}
+          >
+            <Text style={styles.updateButtonText}>
+              {downloading ? `מוריד ${downloadProgress}%` : '⬆ עדכון'}
+            </Text>
           </TouchableOpacity>
         )}
       </View>
