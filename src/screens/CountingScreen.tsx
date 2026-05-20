@@ -112,6 +112,13 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
   const inputRef = useRef<TextInput>(null);
   const quantityRef = useRef<TextInput>(null);
 
+  // Continuous-mode dedup: when the trigger is held the hardware fires every 100ms
+  // on the same physical barcode. Ignore repeated reads of the same code for 1500ms
+  // so each physical unit = one count.
+  const lastScanCodeRef = useRef<string>('');
+  const lastScanTimeRef = useRef<number>(0);
+  const CONTINUOUS_DEDUP_MS = 1500;
+
   // Process barcode from scanner or manual input
   const processBarcode = useCallback(async (scannedCode: string) => {
     if (!scannedCode.trim()) return;
@@ -120,6 +127,18 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
     if (!continuousMode && scannedProduct) return;
 
     const code = scannedCode.trim();
+
+    // Continuous-mode dedup: same code within the window = held trigger, ignore silently.
+    // Different code OR enough time elapsed (= you've moved to the next item) = count it.
+    if (continuousMode) {
+      const now = Date.now();
+      if (code === lastScanCodeRef.current && now - lastScanTimeRef.current < CONTINUOUS_DEDUP_MS) {
+        return;
+      }
+      lastScanCodeRef.current = code;
+      lastScanTimeRef.current = now;
+    }
+
     setLastBarcode(code);
 
     try {
@@ -229,6 +248,9 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
   const toggleContinuousMode = useCallback(async () => {
     const next = !continuousMode;
     setContinuousMode(next);
+    // Reset dedup state so the first scan after toggling always registers
+    lastScanCodeRef.current = '';
+    lastScanTimeRef.current = 0;
     await scanner.setContinuousMode(next);
   }, [continuousMode, scanner]);
 
