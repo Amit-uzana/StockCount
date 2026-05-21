@@ -92,9 +92,10 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
   const [editQuantity, setEditQuantity] = useState('');
   const [editNotes, setEditNotes] = useState('');
 
-  // Continuous mode — like bulk_scanner. Each scan adds qty=1 silently with a beep,
-  // no quantity dialog opens. Hardware trigger can be held for rapid-fire scanning.
-  // Duplicates are explicitly allowed here (each physical unit = one row).
+  // "Auto 1" mode — each trigger press = one scan = silent +1, no dialog.
+  // Hardware stays in single-shot (no held-trigger auto-fire), so dedup isn't
+  // needed: one physical pull = one count. Duplicates of the same code are fine
+  // (each physical unit gets its own row when the user pulls the trigger again).
   const [continuousMode, setContinuousMode] = useState(false);
 
   // Filter list of counted items
@@ -114,13 +115,11 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
   const inputRef = useRef<TextInput>(null);
   const quantityRef = useRef<TextInput>(null);
 
-  // Continuous-mode cooldown: in continuous mode the hardware keeps firing on
-  // its own ("press once, scanning runs forever"). After every processed read
-  // we lock the scanner for COOLDOWN_MS — anything that comes in during the
-  // cooldown is dropped silently. This is exactly the bulk_scanner UX:
-  // press → beep → wait → next item → beep → wait → ...
+  // Tiny dedup guard — the Chainway SDK very occasionally delivers the same
+  // trigger pull as two events 50-150ms apart. Block re-entry for 300ms after
+  // any processed scan so one physical pull = one count.
   const cooldownUntilRef = useRef<number>(0);
-  const COOLDOWN_MS = 1500;
+  const COOLDOWN_MS = 300;
 
   // Process barcode from scanner or manual input
   const processBarcode = useCallback(async (scannedCode: string) => {
@@ -275,14 +274,14 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
     onError: (error) => console.error('Scanner error:', error),
   });
 
-  // Toggle continuous mode — also drives the hardware-level continuous-scan setting
-  // so a single trigger press runs the scanner forever.
+  // Toggle "Auto 1" mode. Hardware stays in single-shot mode either way —
+  // אוטומט 1 only changes whether software opens the qty dialog or auto-adds 1.
   const toggleContinuousMode = useCallback(async () => {
     const next = !continuousMode;
     setContinuousMode(next);
-    // Clear any leftover cooldown so the first scan after toggling counts
     cooldownUntilRef.current = 0;
-    await scanner.setContinuousMode(next);
+    // Force hardware off-continuous in case anything left it on
+    await scanner.setContinuousMode(false);
   }, [continuousMode, scanner]);
 
   const loadItems = async () => {
@@ -579,7 +578,7 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
         <View style={styles.quickRow}>
           <View style={styles.quickToggle}>
             <Text style={[styles.quickLabel, continuousMode && styles.quickLabelActive]}>
-              🔁 מצב מתמשך
+              🤖 אוטומט 1
             </Text>
             <Switch
               value={continuousMode}
@@ -597,11 +596,11 @@ export function CountingScreen({ count, onBack }: CountingScreenProps) {
         </View>
       )}
 
-      {/* Continuous-mode banner */}
+      {/* Auto-1 banner */}
       {continuousMode && !isCompleted && (
         <View style={styles.continuousBanner}>
           <Text style={styles.continuousBannerText}>
-            ⚡ מצב מתמשך – לחץ הדק פעם אחת וסרוק. השהיה של 1.5 שניות בין קריאות.
+            🤖 אוטומט 1 – ירייה אחת בכל פעם, מוסיף +1 בלי דיאלוג.
           </Text>
         </View>
       )}
